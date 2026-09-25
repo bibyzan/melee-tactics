@@ -2,7 +2,7 @@
 
 Melee Tactics is a tactics game played inside a real match of Super Smash Bros. Melee. You pick two fighters. At each break the match freezes, and you choose one exchange from the moves and combos that fit where the fighters actually are. They play that exchange. The fight continues from that moment until someone is knocked off the stage.
 
-A bot plays both fighters from the queues you write. The moves still have to connect under Melee's own hitboxes, physics, and timing.
+Between your picks, Melee's own level 9 CPU moves both fighters: spacing, chasing, recovering, the ledge. It never attacks on its own. Every attack is one you picked, and it still has to connect under Melee's own hitboxes, physics, and timing.
 
 ## How this uses the Melee port
 
@@ -11,7 +11,7 @@ This repository is a fork of [melee-pc](https://github.com/999sian/melee-pc). me
 The mode is `GM_TACTICS`, in `src/melee/tactics`. It is wired in at three places:
 
 - **VS Mode > TACTICS** opens the draft, then one stock on Final Destination with no items and no clock. The draft picks the fighters and whether P2 is a CPU. `play-tactics.cmd` sets `MELEE_BOOT_SCENE=tactics` so the game opens that draft directly.
-- **The CPU think is swapped** for the two tactics fighters. `tactics_Think` writes stick and button state. Melee decides whether that input comes out.
+- **The CPU think is shared.** While a pick is queued, `tactics_Think` writes the stick and buttons for it. Otherwise Melee's CPU think (`ftCo_800B3900`) runs, and `tactics_FilterAi` strips A, Z, the C-stick, and B (except offstage), so the CPU moves but never attacks. Melee decides whether each input comes out.
 - **A break freezes the simulation.** When both queues are spent, neither fighter is attacking, grabbed, in hitstun, or still recovering to the stage, and the two are about to meet (or a chaser is about to reach a launched fighter), the frame loop applies the same processor mask Melee uses for pause. Positions, damage, and velocity stay put while the next queue is chosen.
 
 The launcher, renderer, audio, and controller mapping are the port's. Models, textures, audio, and fonts are read at runtime from a disc image you supply. Nothing from the Melee disc is in this repository.
@@ -38,13 +38,13 @@ With no path, the launcher asks for the disc, then opens the draft. You can also
 
 On the keyboard, arrows or WASD move the cursor, A/D or left/right change the selected row, Enter starts or confirms, and Z backs out of the draft. T/G/F/H are the D-pad and do the same job. A gamepad uses the stick or D-pad, A or Start to confirm, and B to leave the draft.
 
-The draft is the two fighters and whether P2 plays itself. P2 is a CPU by default, so one controller is enough. Enter starts the stock. With nothing queued, the fighters run at each other. Just before they meet, the match freezes mid-run and lists every exchange that fits the spacing, the height, and the damage. A row is one move or a two-move combo, such as down tilt into up air. Up and down move through that list. A or Start plays the highlighted row against the CPU's row. The CPU picks only when the exchange starts, so you never see its choice. With two humans, P1 locks in first, then P2 picks from their own list. Neither side's pick is shown.
+The draft is the two fighters and whether P2 plays itself. P2 is a CPU by default, so one controller is enough. Enter starts the stock. Melee's CPU moves both fighters in. Just before they meet, the match freezes and lists every exchange that fits the spacing, the height, and the damage. A row is one move or a two-move combo, such as down tilt into up air. Up and down move through that list. A or Start plays the highlighted row against the CPU's row. The CPU picks only when the exchange starts, so you never see its choice. With two humans, P1 locks in first, then P2 picks from their own list. Neither side's pick is shown.
 
-A launch opens a second kind of break. When a fighter is knocked into tumble, the other one chases on its own: it runs underneath, then jumps and double-jumps up to meet them. Just before the chaser reaches them, the match freezes. The chaser picks a move or a combo (up air, up air into up air, neutral air into forward air, up smash to cover the landing) or waits for the read. The launched fighter picks a reaction only once it can act, so the reaction comes out right away: air dodge away, jump away, drift away, or an aerial. While it is still in hitstun, only the chaser picks. The instant hitstun ends in the air, the match freezes again for the reaction. If the follow-up launches again, the chase starts over, so juggles become a series of reads. Launches offstage and trades keep playing.
+A launch opens a second kind of break. When a fighter is knocked into tumble, Melee's CPU chases with the other one. Just before the chaser reaches them, the match freezes. The chaser picks a move or a combo (up air, up air into up air, neutral air into forward air, up smash to cover the landing) or waits for the read. The launched fighter picks a reaction only once it can act, so the reaction comes out right away: air dodge away, jump away, drift away, or an aerial. While it is still in hitstun, only the chaser picks. The instant hitstun ends in the air, the match freezes again for the reaction. If the follow-up launches again, the chase starts over, so juggles become a series of reads. Launches offstage and trades keep playing.
 
 An aerial in the air waits for its moment. The timing comes from Melee's own CPU attack selector: each character's real frames to the hitbox and hitbox box, from `PlCo.dat`, with both fighters' motion predicted to that frame. `MELEE_TACTICS_AI_DUMP=1` logs those tables.
 
-A break only waits for the players who have a choice. If both fighters stand idle with nothing queued for half a second, that is a break too, so nobody stands around. If only the CPU does, it picks and play goes on without a pause. Getting hit throws out the rest of your queue, and a tumbling fighter techs when it lands. Offstage recovery, the ledge jump, and getup still happen on their own. The result returns to the draft.
+A break only waits for the players who have a choice. If only the CPU has one, it picks and play goes on without a pause. If both fighters stand idle with nothing queued for half a second, that is a break too, so nobody stands around. Getting hit, a knockdown, the ledge, or being knocked offstage throws out the rest of your queue, and Melee's CPU takes over: it techs, gets up, and recovers. The result returns to the draft.
 
 This version can draft normals and aerials. Ice Climbers are left out until the partner can share the controller policy. Specials and throws are catalogued for later. The bot uses generic spacing.
 

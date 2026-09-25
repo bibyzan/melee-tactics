@@ -19,16 +19,12 @@
 
 typedef struct Brain {
     int slot, phase, age, cooldown, frames, approach;
-    bool executing, saw_attack, teched, connected, forced;
+    bool executing, saw_attack, connected, forced;
 } Brain;
 
-/* With nothing queued, a fighter runs in. The break comes as the gap
- * closes past MEET_TRIGGER, still running; a fighter already inside
- * MEET_STOP stands and waits. The auto run stays this far inside the
- * edges. */
+/* With nothing queued, Melee's own CPU moves the fighter. The break comes as
+ * the two close within MEET_TRIGGER. */
 #define MEET_TRIGGER 34.0f
-#define MEET_STOP 22.0f
-#define AUTO_EDGE (FD_EDGE - 12.0f)
 /* A launched fighter is chased. The break comes when the two are predicted
  * to come within CHASE_REACH in the next CHASE_LEAD frames; a grounded
  * chaser's jump covers CHASE_HOP of the height. */
@@ -37,13 +33,8 @@ typedef struct Brain {
 #define CHASE_HOP 22.0f
 /* Frames an airborne aerial waits for the swing to line up. */
 #define AIR_WAIT 30
-/* The chaser jumps only for a target this far overhead at most. */
-#define CHASE_JUMP 50.0f
 /* Frames a queued move spends closing to its reach before it goes anyway. */
 #define APPROACH_LIMIT 30
-/* A tumbling fighter this close above the floor on the way down presses
- * tech, so it lands in a tech instead of a bounce, a knockdown and a roll. */
-#define TECH_HEIGHT 12.0f
 
 static TacticsLoadout loadouts[2];
 static Brain brains[2];
@@ -100,10 +91,40 @@ void tactics_RestartQueue(int p)
     b->saw_attack = false;
 }
 
-bool tactics_Controls(Fighter* fp)
+static bool tacticsFighter(Fighter* fp)
 {
     return gm_GetCurrentGameMode() == GM_TACTICS && fp->player_id < 2 &&
            !fp->is_sub_fighter && active[fp->player_id];
+}
+
+static bool queueDone(int port);
+
+bool tactics_Controls(Fighter* fp)
+{
+    return tacticsFighter(fp) && !queueDone(fp->player_id);
+}
+
+void tactics_FilterAi(Fighter_GObj* gobj)
+{
+    Fighter* fp = GET_FIGHTER(gobj);
+    bool recovering;
+
+    if (!tacticsFighter(fp)) {
+        return;
+    }
+    tactics_DumpAi(fp);
+    if (++brains[fp->player_id].frames % 600 == 0) {
+        pc_log_line("tactics: P%d cpu mode=%d state=%d percent=%.1f x=%.1f y=%.1f",
+                    fp->player_id + 1, fp->cpu.x18, fp->motion_id, fp->dmg.x1830_percent,
+                    fp->cur_pos.x, fp->cur_pos.y);
+    }
+    /* Every attack is the player's call. The CPU keeps its movement, jumps,
+     * shield, dodges and tech; B stays only for getting back to the stage. */
+    recovering = fp->ground_or_air == GA_Air &&
+                 (fabsf(fp->cur_pos.x) > FD_EDGE || fp->cur_pos.y < FD_FLOOR);
+    fp->cpu.buttons &= ~(HSD_PAD_A | HSD_PAD_Z | (recovering ? 0 : HSD_PAD_B));
+    fp->cpu.cstick.x = 0;
+    fp->cpu.cstick.y = 0;
 }
 
 static bool inRange(int s, int lo, int hi)
@@ -469,51 +490,6 @@ static bool needsStop(int move, const TacticsMoveInfo* info)
            (info->input == TI_SPECIAL && move != TM_SIDE_B);
 }
 
-static float clampEdge(float x)
-{
-    return x > AUTO_EDGE ? AUTO_EDGE : x < -AUTO_EDGE ? -AUTO_EDGE : x;
-}
-
-/* Nothing queued: run in at a standing foe, or chase a launched one. The
- * mode breaks before either reaches the other. */
-static void autoMove(Fighter* f, Fighter* enemy, Brain* b, bool air)
-{
-    float gx = clampEdge(enemy->cur_pos.x) - f->cur_pos.x;
-    float dy = enemy->cur_pos.y - f->cur_pos.y;
-    int gdir = gx >= 0 ? 1 : -1;
-
-    if (f->motion_id == ftCo_MS_KneeBend && tumbling(enemy)) {
-        f->cpu.buttons = HSD_PAD_X;
-        return;
-    }
-    if (!actionable(f) || tumbling(f)) {
-        return;
-    }
-    if (!tumbling(enemy)) {
-        if (fabsf(enemy->cur_pos.x - f->cur_pos.x) > MEET_STOP && fabsf(gx) > 4.0f) {
-            f->cpu.lstick.x = gdir * 127;
-        }
-        return;
-    }
-    if (air) {
-        f->cpu.lstick.x = fabsf(gx) > 4.0f ? gdir * 127 : 0;
-        /* Falling short of a target still overhead: spend the midair jump.
-         * Pressing only every other frame gives the button a fresh press. */
-        if (f->self_vel.y <= 0.0f && dy > 12.0f && dy < CHASE_JUMP &&
-            f->x1968_jumpsUsed < f->co_attrs.max_jumps && (b->frames & 1))
-        {
-            f->cpu.buttons = HSD_PAD_X;
-        }
-        return;
-    }
-    if (fabsf(gx) > 12.0f) {
-        f->cpu.lstick.x = gdir * 127;
-    } else if (dy > 18.0f && dy < CHASE_JUMP) {
-        /* Held through the jump squat, so it is a full hop. */
-        f->cpu.buttons = HSD_PAD_X;
-    }
-}
-
 void tactics_Think(Fighter_GObj* gobj)
 {
     Fighter* f = GET_FIGHTER(gobj);
@@ -534,7 +510,6 @@ void tactics_Think(Fighter_GObj* gobj)
         }
     }
     pad(f, 0, 0, 0, 0, 0);
-    tactics_DumpAi(f);
     if (enemy == NULL) {
         return;
     }
@@ -542,46 +517,15 @@ void tactics_Think(Fighter_GObj* gobj)
     dx = enemy->cur_pos.x - f->cur_pos.x;
     dir = dx >= 0 ? 1 : -1;
     air = f->ground_or_air == GA_Air;
-    if (b->frames % 600 == 0) {
-        pc_log_line("tactics: P%d frame=%d state=%d route=%d percent=%.1f x=%.1f",
-                    f->player_id + 1, b->frames, f->motion_id, b->slot,
-                    f->dmg.x1830_percent, f->cur_pos.x);
-    }
-    /* Getting hit throws out whatever was left of the plan, so nothing
-     * plays late. The next pick comes when this fighter can act again. */
-    if (f->x221C_b6) {
+    /* Getting hit, the ledge, a knockdown, or the air past the stage end
+     * the pick: whatever was left of it would only play late, and the CPU
+     * handles all of those better. It takes over next frame. */
+    if (f->x221C_b6 || f->motion_id == ftCo_MS_CliffWait ||
+        f->motion_id == ftCo_MS_DownWaitU || f->motion_id == ftCo_MS_DownWaitD ||
+        (air && (fabsf(f->cur_pos.x) > FD_EDGE || f->cur_pos.y < FD_FLOOR)))
+    {
         b->executing = false;
         b->slot = l->count;
-    }
-    if (!tumbling(f)) {
-        b->teched = false;
-    } else if (!b->teched && (f->x221C_b6 || queueDone(f->player_id)) && onStage(f) &&
-               f->cur_pos.y < TECH_HEIGHT && f->self_vel.y + f->x8c_kb_vel.y < 0.0f)
-    {
-        b->teched = true;
-        pad(f, 0, 0, HSD_PAD_R, 0, 0);
-        return;
-    }
-    /* Recovery is not part of the queue. It is available in every exchange. */
-    if (f->motion_id == ftCo_MS_CliffWait) {
-        pad(f, 0, 0, HSD_PAD_X, 0, 0);
-        return;
-    }
-    if (f->motion_id == ftCo_MS_DownWaitU || f->motion_id == ftCo_MS_DownWaitD) {
-        pad(f, dir * 80, 0, 0, 0, 0);
-        return;
-    }
-    if (air && (fabsf(f->cur_pos.x) > FD_EDGE || f->cur_pos.y < FD_FLOOR)) {
-        int inward = f->cur_pos.x > 0 ? -1 : 1;
-        pad(f, inward * 100, 0, 0, 0, 0);
-        if (actionable(f) && b->frames % 12 == 0) {
-            if (f->x1968_jumpsUsed < f->co_attrs.max_jumps) {
-                f->cpu.buttons = HSD_PAD_X;
-            } else {
-                f->cpu.buttons = HSD_PAD_B;
-                f->cpu.lstick.y = 127;
-            }
-        }
         return;
     }
 
@@ -589,7 +533,6 @@ void tactics_Think(Fighter_GObj* gobj)
         b->slot++;
     }
     if (!b->executing && b->slot >= l->count) {
-        autoMove(f, enemy, b, air);
         return;
     }
 

@@ -10,7 +10,8 @@
  * someone is knocked out (GM_TACTICS, tacticsmode.c).
  *
  * tacticsmoves.c  move catalogue: inputs, reach, names, draft weights
- * tacticsbot.c    per-fighter brain; replaces the CPU think for queued moves
+ * tacticsbot.c    plays a queued pick; between picks Melee's CPU drives, attacks held
+ * tacticsai.c     reads the CPU attack tables and asks its selector about timing
  * tacticsmode.c   draft, the in-fight planning pause, and the VS rules
  * Draft rendering reuses the native menu backdrop and SIS lobby view. */
 
@@ -121,8 +122,12 @@ int tactics_AirBreak(bool* picks);
 bool tactics_BreakInAction(void);
 /// Both fighters can act, neither has anything queued, and neither is moving.
 bool tactics_BothIdle(void);
-/// True when this fighter is driven by a tactics bot instead of the CPU AI.
+/// True while a queued pick drives this fighter. Between picks Melee's own
+/// CPU AI drives it (see tactics_FilterAi).
 bool tactics_Controls(Fighter* fp);
+/// Run after the CPU think for a tactics fighter: strips the attack inputs,
+/// so the CPU moves, shields and recovers but never attacks on its own.
+void tactics_FilterAi(Fighter_GObj* gobj);
 /// Fill fp->cpu's pad state for this frame; runs in place of ftCo_800B3900.
 void tactics_Think(Fighter_GObj* gobj);
 

@@ -1722,8 +1722,14 @@ void Fighter_8006ABA0(Fighter_GObj* gobj)
 {
     Fighter* fp = GET_FIGHTER(gobj);
     if (!fp->x221F_b3 && ftCo_IsCpuControlled(fp)) {
-        if (tactics_Controls(fp)) tactics_Think(gobj);
-        else ftCo_800B3900(gobj);
+        /* Tactics: a queued pick drives the fighter; otherwise Melee's own
+         * CPU does, with its attacks held back for the player's picks. */
+        if (tactics_Controls(fp)) {
+            tactics_Think(gobj);
+        } else {
+            ftCo_800B3900(gobj);
+            tactics_FilterAi(gobj);
+        }
     }
 }
 
