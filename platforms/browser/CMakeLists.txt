@@ -40,7 +40,7 @@ list(APPEND BROWSER_PC_SOURCES
 file(GLOB_RECURSE GAME_OBJECTS CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/build/browser/game/*.o")
 set_source_files_properties(${GAME_OBJECTS} PROPERTIES EXTERNAL_OBJECT TRUE GENERATED TRUE)
 add_executable(melee_browser ${GAME_OBJECTS}
- main.c dvd.c scheduler.c pc_stubs.c link_web.c
+ main.c dvd.c scheduler.c pc_stubs.c link_web.c plan_web.c
  ${BROWSER_PC_SOURCES})
 target_include_directories(melee_browser PRIVATE ${CMAKE_SOURCE_DIR}/extern/aurora/include ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/src/sdk_include ${CMAKE_SOURCE_DIR}/extern/monocypher)
 target_link_libraries(melee_browser PRIVATE aurora::core aurora::gx aurora::gd aurora::vi aurora::pad aurora::si aurora::mtx aurora::os aurora::card aurora::thp)

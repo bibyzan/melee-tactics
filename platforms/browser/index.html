@@ -87,6 +87,21 @@
   .btn-start { width: 36%; height: 15%; left: 32%; top: 6%; border-radius: 999px; background: #c9c9d6;
                font-size: calc(var(--pad) * 0.06); letter-spacing: 0.08em; }
 
+  /* The tappable pick list, over the game's own list (the lower half of the
+     picture: 220 to 470 of 480). */
+  #game { position: relative; }
+  .plan { position: absolute; left: 2%; right: 2%; top: 45.5%; bottom: 2%; display: flex;
+          flex-direction: column; gap: 4px; padding: 6px; box-sizing: border-box;
+          background: #07070c; border-top: 2px solid #e0b030a0; border-radius: 4px; }
+  .plan[hidden] { display: none; }
+  .plan-head { color: #ddd; font-size: clamp(11px, 2.4vmin, 16px); white-space: nowrap; overflow: hidden;
+               text-overflow: ellipsis; }
+  .plan-head b { color: #f0c850; }
+  .plan-row { flex: 1; min-height: 0; border: 0; border-radius: 6px; background: #22222e; color: #e8e8f0;
+              font: 700 clamp(12px, 3vmin, 20px) system-ui, sans-serif; text-align: left; padding: 0 12px;
+              touch-action: none; -webkit-tap-highlight-color: transparent; }
+  .plan-row.current { background: #34344a; box-shadow: inset 3px 0 0 #e0b030; }
+  .plan-row.chosen { background: #e0b030; color: #111; }
   #status { color: #fc6; text-align: center; padding: 4px 16px; }
   #status:empty { display: none; }
   body.touch.playing #status { position: fixed; top: 0; left: 0; right: 0; background: #000c; }

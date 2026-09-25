@@ -22,6 +22,7 @@
 #include <melee/gr/forward.h>
 #include <melee/lb/lblanguage.h>
 #include <pc/link.h>
+#include <pc/plan_ui.h>
 #include <pc/pc.h>
 #include <pc/render_scale.h>
 #include <sysdolphin/baselib/gobj.h>
@@ -40,6 +41,8 @@
 #define SCRIPT_STALL_FRAMES (20 * 60)
 #define MENU_ROWS 4
 #define OPT_CAP 8
+/* How many choices a break offers: a short list reads at a glance. */
+#define OPT_SHOWN 5
 
 static TacticsLoadout draft[2] = {
     { CKind_Fox, { TM_NONE, TM_NONE }, 0 },
@@ -56,6 +59,10 @@ static int auto_frames = PLAN_AUTO_FRAMES;
  * once the lobby agreed on the seed and both fighters. */
 static bool online, online_ready, online_agreed, after_online;
 static u32 online_seed, brk_sum;
+/* A row tapped on the page's buttons (plan_ui.h), taken on the next frame of
+ * the pick menu as if the cursor were moved there and A pressed. */
+static int tapped = -1;
+static int takeTap(int who);
 static int online_ckind[2];
 static bool p2_cpu = true;
 static int settle, plan_port, plan_frames, idle, since_plan;
@@ -220,7 +227,9 @@ static int buildOptions(int which, Opt* out, int cap)
             continue;
         }
         opt.a = r->a;
-        opt.b = r->b;
+        /* One move per pick: a break comes again right before the next
+         * contact, so a combo's second half is just the next pick. */
+        opt.b = TM_NONE;
         for (k = 0; k < n; k++) {
             if (sameOpt(&out[k], &opt)) {
                 dup = true;
@@ -259,39 +268,37 @@ static int addOpts(int ckind, const Opt* list, int count, Opt* out, int n, int c
 static int buildReactOptions(int which, Opt* out, int cap)
 {
     static const Opt react[] = {
-        { TM_AIRDODGE, TM_NONE }, { TM_JUMP, TM_NONE }, { TM_DRIFT, TM_NONE },
-        { TM_NAIR, TM_NONE },     { TM_FAIR, TM_NONE }, { TM_BAIR, TM_NONE },
-        { TM_DAIR, TM_NONE },     { TM_UAIR, TM_NONE },
+        { TM_AIRDODGE, TM_NONE }, { TM_JUMP, TM_NONE }, { TM_NAIR, TM_NONE },
+        { TM_FAIR, TM_NONE },     { TM_DAIR, TM_NONE }, { TM_BAIR, TM_NONE },
     };
     Fighter* self = portFighter(which);
     int ckind = draft[which].ckind;
 
+    /* Out of midair jumps, jumping away is not a choice. */
     if (self != NULL && self->x1968_jumpsUsed >= self->co_attrs.max_jumps) {
-        return addOpts(ckind, react + 2, 6, out, addOpts(ckind, react, 1, out, 0, cap), cap);
+        return addOpts(ckind, react + 2, 4, out, addOpts(ckind, react, 1, out, 0, cap), cap);
     }
-    return addOpts(ckind, react, 8, out, 0, cap);
+    return addOpts(ckind, react, 6, out, 0, cap);
 }
 
-/* The chaser about to reach a launched foe: a move or a combo, or wait for
- * the read. */
+/* The chaser about to reach a launched foe: a move, or wait for the read. */
 static int buildChaseOptions(int which, Opt* out, int cap)
 {
     static const Opt ground[] = {
-        { TM_UAIR, TM_NONE },   { TM_UAIR, TM_UAIR },  { TM_NAIR, TM_FAIR },
-        { TM_FAIR, TM_NONE },   { TM_BAIR, TM_NONE },  { TM_UTILT, TM_UAIR },
+        { TM_UAIR, TM_NONE },   { TM_NAIR, TM_NONE }, { TM_FAIR, TM_NONE },
         { TM_USMASH, TM_NONE }, { TM_NONE, TM_NONE },
     };
     static const Opt air[] = {
-        { TM_UAIR, TM_NONE }, { TM_UAIR, TM_UAIR }, { TM_NAIR, TM_FAIR }, { TM_FAIR, TM_NONE },
-        { TM_BAIR, TM_NONE }, { TM_DAIR, TM_NONE }, { TM_NONE, TM_NONE },
+        { TM_UAIR, TM_NONE }, { TM_NAIR, TM_NONE }, { TM_FAIR, TM_NONE },
+        { TM_DAIR, TM_NONE }, { TM_NONE, TM_NONE },
     };
     Fighter* self = portFighter(which);
     int ckind = draft[which].ckind;
 
     if (self != NULL && self->ground_or_air == GA_Air) {
-        return addOpts(ckind, air, 7, out, 0, cap);
+        return addOpts(ckind, air, 5, out, 0, cap);
     }
-    return addOpts(ckind, ground, 8, out, 0, cap);
+    return addOpts(ckind, ground, 5, out, 0, cap);
 }
 
 static Fighter* portFighter(int which)
@@ -407,6 +414,8 @@ static void showPlan(void)
 {
     char buf[64];
     char label[64];
+    char labels[OPT_CAP][64];
+    const char* label_ptrs[OPT_CAP];
     int who = plan_port;
     int foe = who ^ 1;
     int i;
@@ -432,6 +441,7 @@ static void showPlan(void)
             setPlanLine(&plan_lines[LINE_OPT + i], "");
         }
         setPlanLine(&plan_lines[LINE_HINT], "");
+        pc_plan_ui(true, plan_lines[LINE_TITLE].text, plan_lines[LINE_SUB].text, NULL, 0, -1);
         return;
     }
     snprintf(buf, sizeof(buf), "P%d %s  %d%%", who + 1, tactics_FighterName(draft[who].ckind),
@@ -458,6 +468,8 @@ static void showPlan(void)
         PlanLine* line = &plan_lines[LINE_OPT + i];
 
         if (i < opt_n[who]) {
+            optionLabel(labels[i], sizeof(labels[i]), draft[who].ckind, &opts[who][i]);
+            label_ptrs[i] = labels[i];
             optionLabel(label, sizeof(label), draft[who].ckind, &opts[who][i]);
             snprintf(buf, sizeof(buf), "%s%s", i == opt_cursor[who] ? "> " : "  ", label);
             setPlanLine(line, buf);
@@ -476,12 +488,16 @@ static void showPlan(void)
         setPlanLine(&plan_lines[LINE_HINT], buf);
     }
     setPlanColor(&plan_lines[LINE_HINT], &col_dim);
+    /* On a touch screen the page lays tappable buttons over this list. */
+    pc_plan_ui(true, plan_lines[LINE_TITLE].text, plan_lines[LINE_SUB].text, label_ptrs,
+               opt_n[who], opt_cursor[who]);
 }
 
 static void hidePlanText(void)
 {
     int i;
 
+    pc_plan_ui(false, "", "", NULL, 0, -1);
     if (!plan_ui) {
         return;
     }
@@ -576,6 +592,7 @@ static void openPlan(int launched, const bool* picks)
     int p;
 
     react_port = launched;
+    tapped = -1; /* a tap meant for the last break */
     for (p = 0; p < 2; p++) {
         choosing[p] = picks[p];
         opt_n[p] = 0;
@@ -587,11 +604,11 @@ static void openPlan(int launched, const bool* picks)
             continue;
         }
         if (launched < 0) {
-            opt_n[p] = buildOptions(p, opts[p], OPT_CAP);
+            opt_n[p] = buildOptions(p, opts[p], OPT_SHOWN);
         } else if (p == launched) {
-            opt_n[p] = buildReactOptions(p, opts[p], OPT_CAP);
+            opt_n[p] = buildReactOptions(p, opts[p], OPT_SHOWN);
         } else {
-            opt_n[p] = buildChaseOptions(p, opts[p], OPT_CAP);
+            opt_n[p] = buildChaseOptions(p, opts[p], OPT_SHOWN);
         }
     }
     plan_frames = 0;
@@ -647,6 +664,12 @@ static void netPlanFrame(void)
     if (plan_port == local && !opt_locked[local]) {
         u64 keys = gm_GetButtonsTriggered(4);
         bool lock = (keys & (PAD_CONFIRM | PAD_BUTTON_START)) != 0;
+        int tap = takeTap(local);
+
+        if (tap >= 0) {
+            opt_cursor[local] = tap;
+            lock = true;
+        }
 
         if (opt_n[local] > 0 && (keys & PAD_ANY_UP)) {
             opt_cursor[local] = (opt_cursor[local] + opt_n[local] - 1) % opt_n[local];
@@ -680,6 +703,20 @@ static void netPlanFrame(void)
 bool tactics_IsPlanning(void)
 {
     return planning;
+}
+
+void tactics_PlanTap(int index)
+{
+    tapped = index;
+}
+
+/* The tap for the list on screen, or -1. */
+static int takeTap(int who)
+{
+    int t = tapped;
+
+    tapped = -1;
+    return who >= 0 && t >= 0 && t < opt_n[who] ? t : -1;
 }
 
 static void matchFrame(void);
@@ -767,6 +804,14 @@ static void matchFrame(void)
     }
     who = plan_port;
     keys = gm_GetButtonsTriggered(4);
+    {
+        int tap = takeTap(who);
+
+        if (tap >= 0) {
+            opt_cursor[who] = tap;
+            keys |= PAD_CONFIRM;
+        }
+    }
     if (opt_n[who] > 0 && (keys & PAD_ANY_UP)) {
         opt_cursor[who] = (opt_cursor[who] + opt_n[who] - 1) % opt_n[who];
     }

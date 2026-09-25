@@ -89,3 +89,42 @@ export function wantsTouch(params) {
   if (params.get('touch') === '0') return false;
   return matchMedia('(pointer: coarse)').matches;
 }
+
+// The pick list as big buttons, laid over the game's own list while a break
+// waits for this player (plan_web.c mirrors it here). A tap picks and locks
+// in that move; while the other player is choosing it shows the message.
+export function createPlanOverlay({ game, pick }) {
+  const panel = document.createElement('div');
+  panel.className = 'plan';
+  panel.hidden = true;
+  game.append(panel);
+
+  return function show(parts, cursor) {
+    if (!parts) {
+      panel.hidden = true;
+      return;
+    }
+    const [title, sub, ...labels] = parts;
+    panel.replaceChildren();
+    const head = document.createElement('div');
+    head.className = 'plan-head';
+    head.innerHTML = '<b></b> <span></span>';
+    head.firstChild.textContent = title;
+    head.lastChild.textContent = sub;
+    panel.append(head);
+    labels.forEach((label, index) => {
+      const button = document.createElement('button');
+      button.className = index === cursor ? 'plan-row current' : 'plan-row';
+      button.textContent = label;
+      button.addEventListener('pointerdown', (event) => {
+        event.preventDefault();
+        if (navigator.vibrate) navigator.vibrate(10);
+        panel.querySelectorAll('.plan-row').forEach((b) => b.classList.remove('current'));
+        button.classList.add('current', 'chosen');
+        pick(index);
+      });
+      panel.append(button);
+    });
+    panel.hidden = false;
+  };
+}

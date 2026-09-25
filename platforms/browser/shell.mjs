@@ -6,7 +6,7 @@
 // through Module.tacticsLink (link.mjs).
 import { createDiscCache } from './disc-cache.mjs';
 import { createLinkManager } from './link.mjs';
-import { createTouchControls, wantsTouch } from './touch.mjs';
+import { createPlanOverlay, createTouchControls, wantsTouch } from './touch.mjs';
 
 const $ = (id) => document.getElementById(id);
 const lines = [];
@@ -274,6 +274,7 @@ async function begin() {
     if (touch) {
       createTouchControls({ left: $('pad-left'), right: $('pad-right'),
                             send: (buttons) => Module._browser_touch_pad(buttons) });
+      Module.onPlan = createPlanOverlay({ game: $('game'), pick: (index) => Module._browser_plan_pick(index) });
     }
     status('');
     $('canvas').focus();

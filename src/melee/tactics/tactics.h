@@ -198,6 +198,9 @@ bool tactics_NetWaiting(void);
 /* tacticsmode.c */
 /// True while the match is held for the next exchange.
 bool tactics_IsPlanning(void);
+/// A row tapped on the page's buttons: picked and confirmed on the next frame
+/// of the pick menu (src/pc/plan_ui.h).
+void tactics_PlanTap(int index);
 /// Advance the planning pause. Call once per sim tick, before GObj procs,
 /// and only while the game mode is GM_TACTICS.
 void tactics_MatchFrame(void);
