@@ -1,11 +1,11 @@
 #ifndef MELEE_TACTICS_TACTICS_H
 #define MELEE_TACTICS_TACTICS_H
 
-/* MeleeTactics: short calls inside one real Melee stock. You pick a fighter
- * and queue up to three moves; both fighters play that queue on the real
- * engine. When the exchange ends (neither one attacking, grabbed, or in
- * hitstun), the match freezes in place and both sides queue three more.
- * That repeats until someone is knocked out (GM_TACTICS, tacticsmode.c).
+/* Melee Tactics: short calls inside one real Melee stock. At each break you
+ * pick one exchange, a single move or a two-move combo, from the options
+ * that fit the frozen positions. The fighters play it on the real engine.
+ * When the exchange ends, the match freezes again. That repeats until
+ * someone is knocked out (GM_TACTICS, tacticsmode.c).
  *
  * tacticsmoves.c  move catalogue: inputs, reach, names, draft weights
  * tacticsbot.c    per-fighter brain; replaces the CPU think for queued moves
@@ -16,7 +16,7 @@
 
 #include <melee/ft/forward.h>
 
-#define TACTICS_SLOTS 3
+#define TACTICS_SLOTS 2
 #define TACTICS_PORTS 2
 
 typedef enum TacticsMove {
@@ -111,7 +111,7 @@ bool tactics_Controls(Fighter* fp);
 void tactics_Think(Fighter_GObj* gobj);
 
 /* tacticsmode.c */
-/// True while the match is held for the next three inputs.
+/// True while the match is held for the next exchange.
 bool tactics_IsPlanning(void);
 /// Advance the planning pause. Call once per sim tick, before GObj procs,
 /// and only while the game mode is GM_TACTICS.

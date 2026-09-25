@@ -1,6 +1,6 @@
 # Melee Tactics
 
-Melee Tactics is a tactics game played inside a real match of Super Smash Bros. Melee. You pick two fighters and queue up to three moves. Both fighters play that queue. When the exchange ends, the match freezes where it is, and you queue the next three. The fight continues from that moment until someone is knocked off the stage.
+Melee Tactics is a tactics game played inside a real match of Super Smash Bros. Melee. You pick two fighters. At each break the match freezes, and you choose one exchange from the moves and combos that fit where the fighters actually are. They play that exchange. The fight continues from that moment until someone is knocked off the stage.
 
 A bot plays both fighters from the queues you write. The moves still have to connect under Melee's own hitboxes, physics, and timing.
 
@@ -10,7 +10,7 @@ This repository is a fork of [melee-pc](https://github.com/999sian/melee-pc). me
 
 The mode is `GM_TACTICS`, in `src/melee/tactics`. It is wired in at three places:
 
-- **VS Mode > TACTICS** opens the draft, then one stock on Final Destination with no items and no clock. `play-tactics.cmd` sets `MELEE_BOOT_SCENE=tactics` so the game opens that draft directly.
+- **VS Mode > TACTICS** opens the draft, then one stock on Final Destination with no items and no clock. The draft picks the fighters and whether P2 is a CPU. `play-tactics.cmd` sets `MELEE_BOOT_SCENE=tactics` so the game opens that draft directly.
 - **The CPU think is swapped** for the two tactics fighters. `tactics_Think` writes stick and button state. Melee decides whether that input comes out.
 - **A break freezes the simulation.** When both queues are spent and neither fighter is attacking, grabbed, in hitstun, or still recovering to the stage, the frame loop applies the same processor mask Melee uses for pause. Positions, damage, and velocity stay put while the next queue is chosen.
 
@@ -36,11 +36,9 @@ play-tactics.cmd "path\to\your\disc.iso"
 
 With no path, the launcher asks for the disc, then opens the draft. You can also reach it from VS Mode > TACTICS.
 
-On the keyboard, arrows or WASD move the cursor, A/D or left/right change the selected value, C switches which fighter you are editing, Enter starts or resumes, and Z backs out of the draft. T/G/F/H are the D-pad and do the same job. A gamepad uses the normal Melee buttons: stick or D-pad, X to switch sides, Start to fight, B to leave the draft.
+On the keyboard, arrows or WASD move the cursor, A/D or left/right change the selected row, Enter starts or confirms, and Z backs out of the draft. T/G/F/H are the D-pad and do the same job. A gamepad uses the stick or D-pad, A or Start to confirm, and B to leave the draft.
 
-The draft has three slots per fighter. Left and right cycle normals and aerials. One step past either end of that list is `pass`. The defaults are Fox (down tilt, up tilt, neutral air) and Marth (forward tilt, up tilt, forward air).
-
-Enter starts the stock. Each fighter walks into range and uses its three moves in order. Offstage recovery, the ledge jump, and getup are automatic and sit outside the queue. At the break, queue the next three the same way and press Enter. The result returns to the draft with the latest queues kept.
+The draft is the two fighters and whether P2 plays itself. P2 is a CPU by default, so one controller is enough. Enter starts the stock. As soon as both fighters are standing, the match freezes and lists every exchange that fits the spacing, the height, and the damage. A row is one move or a two-move combo, such as down tilt into up air. Up and down move through that list. A or Start plays the highlighted row against the CPU's row. Offstage recovery, the ledge jump, and getup still happen on their own. The result returns to the draft.
 
 This version can draft normals and aerials. Ice Climbers are left out until the partner can share the controller policy. Specials and throws are catalogued for later. The bot uses generic spacing.
 

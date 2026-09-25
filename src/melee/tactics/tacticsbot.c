@@ -24,12 +24,13 @@ typedef struct Brain {
 
 static TacticsLoadout loadouts[2];
 static Brain brains[2];
+static bool active[2];
 
 void tactics_SetLoadout(int p, const TacticsLoadout* l)
 {
     int i;
 
-    if (p < 0 || p >= 2 || l == NULL || l->count == 0 || l->count > TACTICS_SLOTS) {
+    if (p < 0 || p >= 2 || l == NULL || l->ckind < 0 || l->count > TACTICS_SLOTS) {
         return;
     }
     for (i = 0; i < l->count; i++) {
@@ -41,11 +42,13 @@ void tactics_SetLoadout(int p, const TacticsLoadout* l)
         }
     }
     loadouts[p] = *l;
+    active[p] = true;
 }
 
 void tactics_ClearLoadouts(void)
 {
     memset(loadouts, 0, sizeof(loadouts));
+    active[0] = active[1] = false;
 }
 
 void tactics_BeginMatch(void)
@@ -70,7 +73,7 @@ void tactics_RestartQueues(void)
 bool tactics_Controls(Fighter* fp)
 {
     return gm_GetCurrentGameMode() == GM_TACTICS && fp->player_id < 2 &&
-           !fp->is_sub_fighter && loadouts[fp->player_id].count > 0;
+           !fp->is_sub_fighter && active[fp->player_id];
 }
 
 static bool inRange(int s, int lo, int hi)
@@ -156,7 +159,7 @@ bool tactics_BreakInAction(void)
         if (f->player_id >= 2 || f->is_sub_fighter) {
             continue;
         }
-        if (loadouts[f->player_id].count == 0) {
+        if (!active[f->player_id]) {
             return false;
         }
         seen++;
