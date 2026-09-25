@@ -6,6 +6,7 @@
 // through Module.tacticsLink (link.mjs).
 import { createDiscCache } from './disc-cache.mjs';
 import { createLinkManager } from './link.mjs';
+import { createTouchControls, wantsTouch } from './touch.mjs';
 
 const $ = (id) => document.getElementById(id);
 const lines = [];
@@ -40,6 +41,20 @@ const ENV = { MELEE_BOOT_SCENE: 'tactics' };
 const params = new URLSearchParams(location.search);
 for (const [key, value] of params) {
   if (/^MELEE_[A-Z0-9_]+$/.test(key)) ENV[key] = value;
+}
+
+// ---- the screen ------------------------------------------------------------
+
+const touch = wantsTouch(params);
+document.body.classList.toggle('touch', touch);
+
+// The upscale: the engine draws Melee's 640x480 frame at this multiple, then
+// fits it to the canvas. 3x on a desktop, 2x on a touch screen, whose GPU pays
+// more for every pixel; ?scale=1..4 picks one.
+function renderScale() {
+  const forced = Math.round(Number(params.get('scale')));
+  if (forced >= 1 && forced <= 4) return forced;
+  return touch ? 2 : 3;
 }
 
 // ---- the disc ------------------------------------------------------------
@@ -160,7 +175,13 @@ async function begin() {
       if (document.visibilityState === 'hidden') syncfs(false).catch(log);
     });
     $('welcome').style.display = 'none';
-    $('game').style.display = 'block';
+    document.body.classList.add('playing');
+    Module.renderScale = renderScale();
+    log(`Rendering at ${640 * Module.renderScale}x${480 * Module.renderScale} (${Module.renderScale}x).`);
+    if (touch) {
+      createTouchControls({ left: $('pad-left'), right: $('pad-right'),
+                            send: (buttons) => Module._browser_touch_pad(buttons) });
+    }
     status('');
     $('canvas').focus();
     Module.callMain([]);

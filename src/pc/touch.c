@@ -4,7 +4,10 @@
 #include <dolphin/pad.h>
 #include <string.h>
 
-#if defined(__ANDROID__) || defined(__APPLE__) || defined(TARGET_OS_IPHONE)
+/* The browser page draws its own controls around the game and feeds them
+ * through pc_touch_set_pad (platforms/browser/main.c), so it takes the pad
+ * but not the in-game touch layout below. */
+#if defined(__ANDROID__) || defined(__APPLE__) || defined(TARGET_OS_IPHONE) || defined(__EMSCRIPTEN__)
 #include <pthread.h>
 #include <SDL3/SDL_events.h>
 
@@ -71,6 +74,10 @@ static struct {
 } s_touch_tracker = {-1, 0.0f, 0.0f, false};
 
 void pc_touch_event(const SDL_Event* e) {
+#ifdef __EMSCRIPTEN__
+    (void)e;
+    return;
+#endif
     if (e == NULL)
         return;
     if (e->type != SDL_EVENT_FINGER_DOWN && e->type != SDL_EVENT_FINGER_MOTION &&

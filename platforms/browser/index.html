@@ -2,11 +2,12 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 <html lang="en">
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="theme-color" content="#0b0b10">
 <title>Melee Tactics</title>
 <link rel="icon" href="data:,">
 <style>
-  :root { color-scheme: dark; }
+  :root { color-scheme: dark; --pad: min(44vmin, 240px); }
   html, body { height: 100%; }
   body { margin: 0; background: #0b0b10; color: #e8e8f0; font: 15px/1.4 system-ui, sans-serif;
          display: flex; flex-direction: column; align-items: center; }
@@ -17,11 +18,60 @@
   #pick:has(input:disabled) { opacity: 0.5; cursor: progress; }
   #pick input { display: none; }
   #welcome p { color: #9a9ab0; font-size: 13px; margin-top: 16px; }
-  #game { display: none; width: min(100vw, calc(100vh * 4 / 3)); }
+
+  /* The game, alone on a desktop. */
+  #stage { display: none; width: min(100vw, calc(100vh * 4 / 3)); }
+  body.playing #stage { display: grid; }
+  #game { grid-area: game; min-width: 0; }
   canvas { display: block; width: 100%; height: auto; aspect-ratio: 4 / 3; background: #000; outline: none; }
-  #status { color: #fc6; text-align: center; min-height: 1.4em; padding: 4px 16px; }
+  .pad { display: none; }
+
+  /* Touch screens: the controls take the space the 4:3 game leaves. */
+  body.touch { overscroll-behavior: none; -webkit-user-select: none; user-select: none;
+               -webkit-touch-callout: none; touch-action: none; }
+  body.touch.playing { height: 100dvh; overflow: hidden; }
+  body.touch #stage { width: 100vw; height: 100dvh; place-items: center; }
+  body.touch .pad { display: flex; align-items: center; justify-content: center; width: 100%; height: 100%; }
+  /* Landscape: the game at full height, controls in the bands either side.
+     Portrait: the game at full width, controls in the space below. Either
+     way the pads are sized from the space the game leaves. */
+  @media (orientation: landscape) {
+    body.touch { --game: min(calc(100dvh * 4 / 3), calc(100vw - 240px));
+                 --pad: min(calc((100vw - var(--game)) / 2 * 0.92), 80dvh, 260px); }
+    body.touch #stage { grid-template: "left game right" 100dvh / 1fr var(--game) 1fr; }
+    body.touch #game { width: var(--game); }
+  }
+  @media (orientation: portrait) {
+    body.touch { --pad: min(44vw, calc((100dvh - 75vw) * 0.85), 260px); }
+    body.touch #stage { grid-template: "game game" auto "left right" 1fr / 1fr 1fr; }
+    body.touch #game { width: 100vw; }
+  }
+  #pad-left { grid-area: left; }
+  #pad-right { grid-area: right; }
+
+  .dpad { position: relative; width: var(--pad); aspect-ratio: 1; border-radius: 50%;
+          background: radial-gradient(circle, #23232e 55%, #1a1a22 56%); touch-action: none; }
+  .dpad span { position: absolute; display: grid; place-items: center; width: 34%; height: 34%;
+               color: #8a8aa0; font-size: calc(var(--pad) * 0.1); border-radius: 12px; background: #2c2c3a; }
+  .dpad .up { left: 33%; top: 2%; } .dpad .down { left: 33%; bottom: 2%; }
+  .dpad .left { top: 33%; left: 2%; } .dpad .right { top: 33%; right: 2%; }
+  .dpad[data-dir="up"] .up, .dpad[data-dir="down"] .down,
+  .dpad[data-dir="left"] .left, .dpad[data-dir="right"] .right { background: #e0b030; color: #111; }
+
+  .face { position: relative; width: var(--pad); aspect-ratio: 1; }
+  .btn { position: absolute; border: 0; border-radius: 50%; font: 800 calc(var(--pad) * 0.1) system-ui, sans-serif;
+         color: #111; touch-action: none; -webkit-tap-highlight-color: transparent; }
+  .btn.down { filter: brightness(1.35); transform: scale(0.94); }
+  .btn-a { width: 46%; height: 46%; right: 8%; bottom: 14%; background: #2fb86a; }
+  .btn-b { width: 28%; height: 28%; left: 6%; bottom: 4%; background: #d8433f; color: #fff; }
+  .btn-start { width: 36%; height: 15%; left: 32%; top: 6%; border-radius: 999px; background: #c9c9d6;
+               font-size: calc(var(--pad) * 0.06); letter-spacing: 0.08em; }
+
+  #status { color: #fc6; text-align: center; padding: 4px 16px; }
   #status:empty { display: none; }
+  body.touch.playing #status { position: fixed; top: 0; left: 0; right: 0; background: #000c; }
   details { width: min(100vw - 32px, 960px); color: #777; font-size: 12px; margin: 8px 0 16px; }
+  body.touch.playing details { display: none; }
   pre { white-space: pre-wrap; max-height: 14em; overflow: auto; }
 </style>
 <div id="welcome">
@@ -29,7 +79,11 @@
   <label id="pick">Choose your Melee ISO<input id="disc" type="file" accept=".iso,.gcm" disabled></label>
   <p>Super Smash Bros. Melee, NTSC 1.02 (GALE01). It stays on this device, and the page remembers it for next time.</p>
 </div>
-<div id="game"><canvas id="canvas" width="960" height="720" tabindex="0"></canvas></div>
+<main id="stage">
+  <div class="pad" id="pad-left"></div>
+  <div id="game"><canvas id="canvas" width="1280" height="960" tabindex="0"></canvas></div>
+  <div class="pad" id="pad-right"></div>
+</main>
 <div id="status">Loading…</div>
 <details><summary>Log</summary><button id="forget">Forget the remembered disc</button><pre id="log"></pre></details>
 <script type="module" src="./shell.mjs"></script>

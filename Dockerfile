@@ -29,7 +29,8 @@ RUN python3 tools/browser/setup_sdk.py
 # The page shell and the server are added in the last stage, so editing them
 # does not recompile the game.
 COPY --exclude=server --exclude=platforms/browser/index.html \
-     --exclude=platforms/browser/shell.mjs --exclude=platforms/browser/link.mjs . .
+     --exclude=platforms/browser/shell.mjs --exclude=platforms/browser/link.mjs \
+     --exclude=platforms/browser/touch.mjs . .
 RUN python3 tools/browser/build.py --jobs "$(nproc)" \
     && mkdir /web \
     && cp build/browser/runtime/platforms/browser/*.js \
@@ -46,7 +47,8 @@ RUN go test ./... && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /melee
 FROM gcr.io/distroless/static-debian12
 COPY --from=server /melee-tactics-server /app/server
 COPY --from=wasm /web /app/web
-COPY platforms/browser/index.html platforms/browser/shell.mjs platforms/browser/link.mjs /app/web/
+COPY platforms/browser/index.html platforms/browser/shell.mjs platforms/browser/link.mjs \
+     platforms/browser/touch.mjs /app/web/
 ENV WEB_DIR=/app/web PORT=8080
 EXPOSE 8080
 USER nonroot

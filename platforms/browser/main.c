@@ -2,9 +2,11 @@
 #include "pc/discfont.h"
 #include "pc/launcher.h"
 #include "pc/pc.h"
+#include "pc/touch.h"
 #include <SDL3/SDL.h>
 #include <aurora/aurora.h>
 #include <aurora/dvd.h>
+#include <dolphin/vi.h>
 #include <dolphin/card.h>
 #include <emscripten.h>
 #include <stdarg.h>
@@ -36,6 +38,12 @@ void pc_menu_event(const SDL_Event* e) {
 bool pc_menu_is_open(void) {
     return false;
 }
+/* The page's on-screen controls (touch.mjs): the GameCube buttons held right
+ * now, as PAD_BUTTON_* bits. A tap between two frames still counts, because
+ * pc_touch_set_pad latches presses until the pad is next read. */
+EMSCRIPTEN_KEEPALIVE void browser_touch_pad(int buttons) {
+    pc_touch_set_pad((uint16_t)buttons, 0, 0, 0, 0, 0, 0);
+}
 int main(int argc, char** argv) {
     mkdir("/saves", 0777);
     mkdir("/cache", 0777);
@@ -63,6 +71,9 @@ int main(int argc, char** argv) {
     c.windowHeight = EM_ASM_INT({ return Module.canvas.height; });
     AuroraInfo info = aurora_initialize(argc, argv, &c);
     (void)info;
+    /* The upscale: Melee's 640x480 frame times the page's render scale,
+     * whatever size the canvas is shown at (0 would follow the canvas). */
+    VISetFrameBufferScale((float)EM_ASM_DOUBLE({ return Module.renderScale || 0; }));
     extern void browser_prepare_graphics(void);
     browser_prepare_graphics();
     pc_platform_init();
