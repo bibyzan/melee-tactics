@@ -108,11 +108,14 @@ void tactics_SetLoadout(int port, const TacticsLoadout* loadout);
 void tactics_ClearLoadouts(void);
 /// Reset every bot's per-match state; call when a tactics match starts.
 void tactics_BeginMatch(void);
-/// Play the current queues again from the first move. Positions are untouched.
-void tactics_RestartQueues(void);
-/// The port of a fighter launched into tumble whose chaser is about to reach
-/// it, or -1. Fires once per launch. Call once per sim tick while not planning.
-int tactics_ChaseMeet(void);
+/// Play this port's queue again from the first move. Positions are untouched.
+void tactics_RestartQueue(int port);
+/// An air break: the port of a launched fighter that just came out of
+/// hitstun, or whose chaser is about to reach it (once per launch); -1 if
+/// none. picks[] says which ports choose: the launched one only once it can
+/// act, the chaser only when it is arriving. Call once per sim tick while not
+/// planning.
+int tactics_AirBreak(bool* picks);
 /// Both queues are spent, neither fighter is attacking, grabbed, in hitstun,
 /// or still recovering to the stage, and the two are about to meet.
 bool tactics_BreakInAction(void);

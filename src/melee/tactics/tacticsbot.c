@@ -19,7 +19,7 @@
 
 typedef struct Brain {
     int slot, phase, age, cooldown, frames, approach;
-    bool executing, saw_attack;
+    bool executing, saw_attack, teched;
 } Brain;
 
 /* With nothing queued, a fighter runs in. The break comes as the gap
@@ -35,12 +35,16 @@ typedef struct Brain {
 /* The chaser jumps only for a target this far overhead at most. */
 #define CHASE_JUMP 50.0f
 /* Frames a queued move spends closing to its reach before it goes anyway. */
-#define APPROACH_LIMIT 60
+#define APPROACH_LIMIT 30
+/* A tumbling fighter this close above the floor on the way down presses
+ * tech, so it lands in a tech instead of a bounce, a knockdown and a roll. */
+#define TECH_HEIGHT 12.0f
 
 static TacticsLoadout loadouts[2];
 static Brain brains[2];
 static bool active[2];
 static bool chase_seen[2];
+static bool was_stunned[2];
 
 void tactics_SetLoadout(int p, const TacticsLoadout* l)
 {
@@ -71,21 +75,24 @@ void tactics_BeginMatch(void)
 {
     memset(brains, 0, sizeof(brains));
     memset(chase_seen, 0, sizeof(chase_seen));
+    memset(was_stunned, 0, sizeof(was_stunned));
 }
 
-void tactics_RestartQueues(void)
+void tactics_RestartQueue(int p)
 {
-    int p;
+    Brain* b;
 
-    for (p = 0; p < 2; p++) {
-        brains[p].slot = 0;
-        brains[p].phase = 0;
-        brains[p].age = 0;
-        brains[p].cooldown = 2;
-        brains[p].approach = 0;
-        brains[p].executing = false;
-        brains[p].saw_attack = false;
+    if (p < 0 || p >= 2) {
+        return;
     }
+    b = &brains[p];
+    b->slot = 0;
+    b->phase = 0;
+    b->age = 0;
+    b->cooldown = 0;
+    b->approach = 0;
+    b->executing = false;
+    b->saw_attack = false;
 }
 
 bool tactics_Controls(Fighter* fp)
@@ -217,18 +224,25 @@ static bool onStage(Fighter* f)
     return fabsf(f->cur_pos.x) <= FD_EDGE && f->cur_pos.y >= FD_FLOOR;
 }
 
-int tactics_ChaseMeet(void)
+int tactics_AirBreak(bool* picks)
 {
     Fighter* fs[2];
-    int hit = -1;
+    bool ended[2];
     int p;
 
     if (!fighterPair(fs)) {
         return -1;
     }
     for (p = 0; p < 2; p++) {
+        bool stunned = fs[p]->x221C_b6;
+
+        ended[p] = was_stunned[p] && !stunned;
+        was_stunned[p] = stunned;
+    }
+    for (p = 0; p < 2; p++) {
         Fighter* v = fs[p];
         Fighter* a = fs[p ^ 1];
+        bool chaser_free, meet, react;
         float dx, dy;
 
         /* A fresh hit starts a fresh launch. */
@@ -236,24 +250,31 @@ int tactics_ChaseMeet(void)
             chase_seen[p] = false;
             continue;
         }
-        if (chase_seen[p] || hit >= 0) {
+        /* Offstage the recovery is automatic. */
+        if (!onStage(v)) {
             continue;
         }
-        /* Offstage the recovery is automatic, and a trade has no one free to
-         * follow up. */
-        if (!onStage(v) || !onStage(a) || tumbling(a) || a->victim_gobj != NULL ||
-            a->dmg.x195c_hitlag_frames > 0.0f || !queueDone(p ^ 1) || !actionable(a))
-        {
-            continue;
-        }
+        /* A trade has no one free to follow up. */
+        chaser_free = onStage(a) && !tumbling(a) && a->victim_gobj == NULL &&
+                      a->dmg.x195c_hitlag_frames <= 0.0f && queueDone(p ^ 1) && actionable(a);
         dx = v->cur_pos.x - a->cur_pos.x;
         dy = v->cur_pos.y - a->cur_pos.y;
-        if (dx * dx + dy * dy <= CHASE_MEET * CHASE_MEET) {
-            chase_seen[p] = true;
-            hit = p;
+        meet = !chase_seen[p] && chaser_free && dx * dx + dy * dy <= CHASE_MEET * CHASE_MEET;
+        /* The launched fighter picks only once it can act, so its pick comes
+         * out right away: when hitstun ends, or when the chaser arrives
+         * after that. */
+        react = actionable(v) && queueDone(p) && (ended[p] || meet);
+        if (!meet && !react) {
+            continue;
         }
+        if (meet) {
+            chase_seen[p] = true;
+        }
+        picks[p] = react;
+        picks[p ^ 1] = meet;
+        return p;
     }
-    return hit;
+    return -1;
 }
 
 static void pad(Fighter* f, int x, int y, unsigned buttons, int cx, int cy)
@@ -408,6 +429,21 @@ void tactics_Think(Fighter_GObj* gobj)
                     f->player_id + 1, b->frames, f->motion_id, b->slot,
                     f->dmg.x1830_percent, f->cur_pos.x);
     }
+    /* Getting hit throws out whatever was left of the plan, so nothing
+     * plays late. The next pick comes when this fighter can act again. */
+    if (f->x221C_b6) {
+        b->executing = false;
+        b->slot = l->count;
+    }
+    if (!tumbling(f)) {
+        b->teched = false;
+    } else if (!b->teched && (f->x221C_b6 || queueDone(f->player_id)) && onStage(f) &&
+               f->cur_pos.y < TECH_HEIGHT && f->self_vel.y + f->x8c_kb_vel.y < 0.0f)
+    {
+        b->teched = true;
+        pad(f, 0, 0, HSD_PAD_R, 0, 0);
+        return;
+    }
     /* Recovery is not part of the queue. It is available in every exchange. */
     if (f->motion_id == ftCo_MS_CliffWait) {
         pad(f, 0, 0, HSD_PAD_X, 0, 0);
@@ -472,7 +508,7 @@ void tactics_Think(Fighter_GObj* gobj)
         if ((b->saw_attack && actionable(f)) || b->age > 150) {
             b->executing = false;
             b->slot++;
-            b->cooldown = 3;
+            b->cooldown = 1;
             return;
         }
         if (info->input == TI_THROW && f->motion_id == ftCo_MS_CatchWait) {

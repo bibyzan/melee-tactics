@@ -29,7 +29,7 @@
 #include <sysdolphin/baselib/sislib.h>
 
 /* Short, because the fighters are running in while it counts. */
-#define PLAN_SETTLE 4
+#define PLAN_SETTLE 2
 #define PLAN_AUTO_FRAMES 45
 #define MENU_ROWS 4
 #define OPT_CAP 8
@@ -116,6 +116,8 @@ static Opt opts[2][OPT_CAP];
 static int opt_n[2];
 static int opt_cursor[2];
 static bool opt_locked[2];
+/* Which ports pick at this break. */
+static bool choosing[2];
 
 typedef struct PlanLine {
     int entry;
@@ -390,7 +392,7 @@ static void showPlan(void)
 {
     char buf[64];
     char label[64];
-    int who = p2_cpu ? 0 : plan_port;
+    int who = plan_port;
     int foe = who ^ 1;
     int i;
 
@@ -405,19 +407,14 @@ static void showPlan(void)
     /* Only the chooser's own list is shown. The other side's pick stays
      * hidden until the exchange plays. */
     if (react_port == who) {
-        Fighter* self = portFighter(who);
-
-        /* The reaction still waits out the hitstun, and the player should
-         * know that. */
-        snprintf(buf, sizeof(buf), "P%d is on you! %s", foe + 1,
-                 self != NULL && self->x221C_b6 ? "Still in hitstun..." : "React!");
+        snprintf(buf, sizeof(buf), "Out of hitstun! React!");
     } else if (react_port == foe) {
         snprintf(buf, sizeof(buf), "Chasing P%d %s %d%%. Go for it!", foe + 1,
                  tactics_FighterName(draft[foe].ckind), portPercent(foe));
     } else {
         snprintf(buf, sizeof(buf), "vs P%d %s  %d%%%s", foe + 1,
                  tactics_FighterName(draft[foe].ckind), portPercent(foe),
-                 !p2_cpu && opt_locked[foe] ? "  (locked in)" : "");
+                 !p2_cpu && choosing[foe] && opt_locked[foe] ? "  (locked in)" : "");
     }
     setPlanLine(&plan_lines[LINE_SUB], buf);
     setPlanColor(&plan_lines[LINE_SUB], &col_white);
@@ -433,7 +430,7 @@ static void showPlan(void)
             setPlanLine(line, "");
         }
     }
-    if (p2_cpu) {
+    if (p2_cpu || !choosing[foe]) {
         setPlanLine(&plan_lines[LINE_HINT], "Up/Down choose    A or START play");
     } else {
         snprintf(buf, sizeof(buf), "Up/Down choose    A or START lock in    P%d look away",
@@ -489,38 +486,61 @@ static int cpuPick(int n)
     return a < b ? a : b;
 }
 
+/* Only the choosers' queues change. A fighter left out of the break keeps
+ * playing what it was doing. */
 static void commitPlan(void)
 {
     int p;
 
-    if (p2_cpu && opt_n[1] > 0) {
+    if (p2_cpu && choosing[1] && opt_n[1] > 0) {
         opt_cursor[1] = cpuPick(opt_n[1]);
     }
     for (p = 0; p < 2; p++) {
         int pick = opt_cursor[p];
 
-        if (opt_n[p] <= 0) {
+        if (!choosing[p] || opt_n[p] <= 0) {
             continue;
         }
         if (pick < 0 || pick >= opt_n[p]) {
             pick = 0;
         }
         queueOption(p, &opts[p][pick]);
+        tactics_RestartQueue(p);
     }
-    tactics_RestartQueues();
     planning = false;
     react_port = -1;
     hidePlanText();
-    pc_log_line("tactics: resume");
 }
 
-/* launched: the port at the peak of a launch, or -1 for a normal break. */
-static void openPlan(int launched)
+/* The next human chooser still to lock in, or -1. */
+static int nextChooser(void)
+{
+    int p;
+
+    for (p = 0; p < 2; p++) {
+        if (choosing[p] && !opt_locked[p]) {
+            return p;
+        }
+    }
+    return -1;
+}
+
+/* launched: the launched port at an air break, or -1 for a normal break.
+ * picks: which ports choose. With no human choosing there is no pause at
+ * all; the CPU picks and play goes on. */
+static void openPlan(int launched, const bool* picks)
 {
     int p;
 
     react_port = launched;
     for (p = 0; p < 2; p++) {
+        choosing[p] = picks[p];
+        opt_n[p] = 0;
+        opt_cursor[p] = 0;
+        opt_locked[p] = !picks[p] || (p == 1 && p2_cpu);
+        if (!picks[p]) {
+            continue;
+        }
         if (launched < 0) {
             opt_n[p] = buildOptions(p, opts[p], OPT_CAP);
         } else if (p == launched) {
@@ -529,23 +549,23 @@ static void openPlan(int launched)
             opt_n[p] = buildChaseOptions(p, opts[p], OPT_CAP);
         }
     }
-    opt_cursor[0] = 0;
-    opt_cursor[1] = 0;
-    opt_locked[0] = false;
-    opt_locked[1] = p2_cpu;
-    plan_port = 0;
     plan_frames = 0;
     settle = 0;
-    planning = true;
     {
         Fighter* a = portFighter(0);
         Fighter* b = portFighter(1);
 
-        pc_log_line("tactics: planning p1=%d p2=%d options=%d launched=%d gap=%.0f,%.0f",
-                    portPercent(0), portPercent(1), opt_n[0], launched,
+        pc_log_line("tactics: planning p1=%d p2=%d picks=%d%d launched=%d gap=%.0f,%.0f",
+                    portPercent(0), portPercent(1), picks[0], picks[1], launched,
                     a && b ? b->cur_pos.x - a->cur_pos.x : 0.0f,
                     a && b ? b->cur_pos.y - a->cur_pos.y : 0.0f);
     }
+    plan_port = nextChooser();
+    if (plan_port < 0) {
+        commitPlan();
+        return;
+    }
+    planning = true;
     showPlan();
 }
 
@@ -574,15 +594,17 @@ void tactics_MatchFrame(void)
         return;
     }
     if (!planning) {
-        int launched = tactics_ChaseMeet();
+        bool picks[2] = { false, false };
+        int launched = tactics_AirBreak(picks);
 
         if (launched >= 0) {
-            openPlan(launched);
+            openPlan(launched, picks);
             return;
         }
         if (tactics_BreakInAction()) {
             if (++settle >= PLAN_SETTLE) {
-                openPlan(-1);
+                picks[0] = picks[1] = true;
+                openPlan(-1, picks);
             }
         } else {
             settle = 0;
@@ -591,7 +613,7 @@ void tactics_MatchFrame(void)
     }
 
     plan_frames++;
-    who = p2_cpu ? 0 : plan_port;
+    who = plan_port;
     keys = gm_GetButtonsTriggered(4);
     if (opt_n[who] > 0 && (keys & PAD_ANY_UP)) {
         opt_cursor[who] = (opt_cursor[who] + opt_n[who] - 1) % opt_n[who];
@@ -605,11 +627,11 @@ void tactics_MatchFrame(void)
     }
     if (keys & (PAD_CONFIRM | PAD_BUTTON_START)) {
         opt_locked[who] = true;
-        if (p2_cpu || (opt_locked[0] && opt_locked[1])) {
+        plan_port = nextChooser();
+        if (plan_port < 0) {
             commitPlan();
             return;
         }
-        plan_port = 1 - plan_port;
     }
     showPlan();
 }
