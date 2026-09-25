@@ -28,7 +28,8 @@
 #include <sysdolphin/baselib/hsd_3915.h>
 #include <sysdolphin/baselib/sislib.h>
 
-#define PLAN_SETTLE 10
+/* Short, because the fighters are running in while it counts. */
+#define PLAN_SETTLE 4
 #define PLAN_AUTO_FRAMES 45
 #define MENU_ROWS 4
 #define OPT_CAP 8
@@ -79,26 +80,28 @@ typedef struct Recipe {
     u8 pct;
 } Recipe;
 
-/* Preference order. The first recipes that match the freeze are the rows. */
+/* Preference order. The first recipes that match the freeze are the rows.
+ * The run-in options (grab, aerial, dash attack, side B) sit near the top so
+ * they survive the row cap next to the close-range combos. */
 static const Recipe recipes[] = {
     { TM_DTILT, TM_UTILT, 0, D_CLOSE, V_LEVEL | V_ABOVE, P_COMBO },
-    { TM_DTILT, TM_UAIR, 0, D_CLOSE, V_LEVEL | V_ABOVE, P_COMBO },
-    { TM_UTILT, TM_UAIR, 0, D_CLOSE, V_LEVEL | V_ABOVE, P_COMBO },
-    { TM_JAB, TM_FTILT, 0, D_CLOSE, V_LEVEL, P_COMBO },
     { TM_UTHROW, TM_NONE, 0, D_CLOSE, V_LEVEL | V_ABOVE, P_COMBO },
     { TM_NAIR, TM_FAIR, 0, D_CLOSE | D_MID, V_LEVEL, P_COMBO },
+    { TM_DASH_ATTACK, TM_FTILT, 0, D_MID | D_FAR, V_LEVEL, P_COMBO },
+    { TM_SIDE_B, TM_NONE, 0, D_MID | D_FAR, V_LEVEL, P_COMBO | P_KILL },
+    { TM_JAB, TM_FTILT, 0, D_CLOSE, V_LEVEL, P_COMBO },
     { TM_FSMASH, TM_NONE, 0, D_CLOSE, V_LEVEL, P_KILL },
     { TM_USMASH, TM_NONE, 0, D_CLOSE, V_LEVEL | V_ABOVE, P_KILL },
     { TM_BTHROW, TM_NONE, 0, D_CLOSE, V_LEVEL, P_KILL },
     { TM_FAIR, TM_NONE, 0, D_CLOSE | D_MID, V_LEVEL, P_COMBO | P_KILL },
+    { TM_DTILT, TM_UAIR, 0, D_CLOSE, V_LEVEL | V_ABOVE, P_COMBO },
+    { TM_UTILT, TM_UAIR, 0, D_CLOSE, V_LEVEL | V_ABOVE, P_COMBO },
     { TM_BAIR, TM_NONE, 0, D_CLOSE | D_MID, V_LEVEL, P_KILL },
     { TM_UAIR, TM_NONE, 0, D_CLOSE, V_ABOVE, P_COMBO | P_KILL },
     { TM_DAIR, TM_NONE, 0, D_CLOSE, V_BELOW, P_COMBO | P_KILL },
-    { TM_DASH_ATTACK, TM_FTILT, 0, D_MID | D_FAR, V_LEVEL, P_COMBO },
     { TM_DASH_ATTACK, TM_NONE, 0, D_MID | D_FAR, V_LEVEL, P_COMBO | P_KILL },
     { TM_FTILT, TM_NONE, 0, D_CLOSE | D_MID, V_LEVEL, P_COMBO | P_KILL },
     { TM_NEUTRAL_B, TM_NONE, 0, D_MID | D_FAR, V_LEVEL | V_ABOVE | V_BELOW, P_COMBO | P_KILL },
-    { TM_SIDE_B, TM_NONE, 0, D_MID | D_FAR, V_LEVEL, P_COMBO | P_KILL },
     { TM_DOWN_B, TM_NONE, 0, D_CLOSE, V_LEVEL | V_BELOW, P_COMBO | P_KILL },
     { TM_NAIR, TM_NONE, 1, D_CLOSE | D_MID, V_LEVEL | V_ABOVE | V_BELOW, P_COMBO | P_KILL },
     { TM_NAIR, TM_FAIR, 1, D_CLOSE | D_MID, V_LEVEL, P_COMBO },
@@ -177,7 +180,8 @@ static int buildOptions(int which, Opt* out, int cap)
     dx = fabsf(foe->cur_pos.x - self->cur_pos.x);
     dy = foe->cur_pos.y - self->cur_pos.y;
     air = self->ground_or_air == GA_Air;
-    dist = dx < 20.0f ? D_CLOSE : dx < 48.0f ? D_MID : D_FAR;
+    /* The fighters are running at each other, so mid range soon is close. */
+    dist = dx < 20.0f ? D_CLOSE : dx < 48.0f ? D_CLOSE | D_MID : D_FAR;
     vert = dy > 14.0f ? V_ABOVE : dy < -14.0f ? V_BELOW : V_LEVEL;
     pct = foe->dmg.x1830_percent >= 80.0f ? P_KILL : P_COMBO;
     for (i = 0; i < (int) (sizeof(recipes) / sizeof(recipes[0])) && n < cap; i++) {
@@ -217,48 +221,60 @@ static int buildOptions(int which, Opt* out, int cap)
     return n;
 }
 
-static int addMoves(int ckind, const u8* moves, int count, Opt* out, int n, int cap)
+static int addOpts(int ckind, const Opt* list, int count, Opt* out, int n, int cap)
 {
     int i;
 
     for (i = 0; i < count && n < cap; i++) {
-        if (moves[i] == TM_NONE || tactics_MoveAllowed(ckind, moves[i])) {
-            out[n].a = moves[i];
-            out[n].b = TM_NONE;
-            n++;
+        const Opt* o = &list[i];
+
+        if (o->a == TM_NONE ||
+            (tactics_MoveAllowed(ckind, o->a) &&
+             (o->b == TM_NONE || tactics_MoveAllowed(ckind, o->b))))
+        {
+            out[n++] = *o;
         }
     }
     return n;
 }
 
-/* The launched fighter at the top of its flight: get away, or swing. */
+/* The launched fighter as the chaser closes in: get away, or swing. */
 static int buildReactOptions(int which, Opt* out, int cap)
 {
-    static const u8 react[] = { TM_AIRDODGE, TM_JUMP,  TM_DRIFT, TM_NAIR,
-                                TM_FAIR,     TM_BAIR,  TM_DAIR,  TM_UAIR };
+    static const Opt react[] = {
+        { TM_AIRDODGE, TM_NONE }, { TM_JUMP, TM_NONE }, { TM_DRIFT, TM_NONE },
+        { TM_NAIR, TM_NONE },     { TM_FAIR, TM_NONE }, { TM_BAIR, TM_NONE },
+        { TM_DAIR, TM_NONE },     { TM_UAIR, TM_NONE },
+    };
     Fighter* self = portFighter(which);
-    int n = 0;
+    int ckind = draft[which].ckind;
 
     if (self != NULL && self->x1968_jumpsUsed >= self->co_attrs.max_jumps) {
-        n = addMoves(draft[which].ckind, react, 1, out, n, cap);
-        return addMoves(draft[which].ckind, react + 2, 6, out, n, cap);
+        return addOpts(ckind, react + 2, 6, out, addOpts(ckind, react, 1, out, 0, cap), cap);
     }
-    return addMoves(draft[which].ckind, react, 8, out, n, cap);
+    return addOpts(ckind, react, 8, out, 0, cap);
 }
 
-/* The attacker below a launched foe: chase it, cover the landing, or wait
- * for the read. */
+/* The chaser about to reach a launched foe: a move or a combo, or wait for
+ * the read. */
 static int buildChaseOptions(int which, Opt* out, int cap)
 {
-    static const u8 ground[] = { TM_UAIR, TM_NAIR, TM_FAIR, TM_BAIR,
-                                 TM_USMASH, TM_UTILT, TM_NONE };
-    static const u8 air[] = { TM_UAIR, TM_NAIR, TM_FAIR, TM_BAIR, TM_DAIR, TM_NONE };
+    static const Opt ground[] = {
+        { TM_UAIR, TM_NONE },   { TM_UAIR, TM_UAIR },  { TM_NAIR, TM_FAIR },
+        { TM_FAIR, TM_NONE },   { TM_BAIR, TM_NONE },  { TM_UTILT, TM_UAIR },
+        { TM_USMASH, TM_NONE }, { TM_NONE, TM_NONE },
+    };
+    static const Opt air[] = {
+        { TM_UAIR, TM_NONE }, { TM_UAIR, TM_UAIR }, { TM_NAIR, TM_FAIR }, { TM_FAIR, TM_NONE },
+        { TM_BAIR, TM_NONE }, { TM_DAIR, TM_NONE }, { TM_NONE, TM_NONE },
+    };
     Fighter* self = portFighter(which);
+    int ckind = draft[which].ckind;
 
     if (self != NULL && self->ground_or_air == GA_Air) {
-        return addMoves(draft[which].ckind, air, 6, out, 0, cap);
+        return addOpts(ckind, air, 7, out, 0, cap);
     }
-    return addMoves(draft[which].ckind, ground, 7, out, 0, cap);
+    return addOpts(ckind, ground, 8, out, 0, cap);
 }
 
 static Fighter* portFighter(int which)
@@ -389,9 +405,14 @@ static void showPlan(void)
     /* Only the chooser's own list is shown. The other side's pick stays
      * hidden until the exchange plays. */
     if (react_port == who) {
-        snprintf(buf, sizeof(buf), "Launched! React before P%d follows up", foe + 1);
+        Fighter* self = portFighter(who);
+
+        /* The reaction still waits out the hitstun, and the player should
+         * know that. */
+        snprintf(buf, sizeof(buf), "P%d is on you! %s", foe + 1,
+                 self != NULL && self->x221C_b6 ? "Still in hitstun..." : "React!");
     } else if (react_port == foe) {
-        snprintf(buf, sizeof(buf), "P%d %s %d%% at the peak. Read it!", foe + 1,
+        snprintf(buf, sizeof(buf), "Chasing P%d %s %d%%. Go for it!", foe + 1,
                  tactics_FighterName(draft[foe].ckind), portPercent(foe));
     } else {
         snprintf(buf, sizeof(buf), "vs P%d %s  %d%%%s", foe + 1,
@@ -516,8 +537,15 @@ static void openPlan(int launched)
     plan_frames = 0;
     settle = 0;
     planning = true;
-    pc_log_line("tactics: planning p1=%d p2=%d options=%d launched=%d", portPercent(0),
-                portPercent(1), opt_n[0], launched);
+    {
+        Fighter* a = portFighter(0);
+        Fighter* b = portFighter(1);
+
+        pc_log_line("tactics: planning p1=%d p2=%d options=%d launched=%d gap=%.0f,%.0f",
+                    portPercent(0), portPercent(1), opt_n[0], launched,
+                    a && b ? b->cur_pos.x - a->cur_pos.x : 0.0f,
+                    a && b ? b->cur_pos.y - a->cur_pos.y : 0.0f);
+    }
     showPlan();
 }
 
@@ -534,7 +562,7 @@ void tactics_MatchFrame(void)
     if (!live) {
         return;
     }
-    /* A knockout or a scripted time limit ends the match. Drop the menu so
+    /* A knockout ends the match. Drop the menu so
      * the victory sequence can play. */
     if (gm_GetMatchOutcome() != OUTCOME_NONE) {
         if (planning) {
@@ -546,7 +574,7 @@ void tactics_MatchFrame(void)
         return;
     }
     if (!planning) {
-        int launched = tactics_LaunchApex();
+        int launched = tactics_ChaseMeet();
 
         if (launched >= 0) {
             openPlan(launched);
@@ -596,11 +624,11 @@ static void enterBattle(GameModeState* state)
     s->rules.stkind = St_Kind_Last;
     s->rules.match_kind = MatchKind_Stock;
     s->rules.is_stock = true;
-    /* A scripted run still needs the stock to end on its own. Play continues
-     * until someone is knocked out. */
-    s->rules.timer_enabled = scripted;
+    /* No clock, scripted or not: play continues until someone is knocked
+     * out. */
+    s->rules.timer_enabled = false;
     s->rules.timer_counts_up = false;
-    s->rules.time_limit = scripted ? 40 : 0;
+    s->rules.time_limit = 0;
     s->rules.item_freq = -1;
     s->rules.is_teams = false;
     s->rules.disable_pausing = true;
@@ -653,6 +681,12 @@ GameModeState gm_Mode_Tactics_States[] = {
 void tactics_DraftEnter(void* unused)
 {
     (void) unused;
+    /* A scripted run is one match. Back at the draft, it is over; the exit
+     * handlers shut the port down. */
+    if (auto_started && getenv("MELEE_TACTICS_AUTOSTART") != NULL) {
+        pc_log_line("tactics: scripted match done, exiting");
+        exit(0);
+    }
     frames = 0;
     live = false;
     planning = false;

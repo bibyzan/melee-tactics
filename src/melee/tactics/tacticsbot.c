@@ -18,19 +18,29 @@
 #define FD_FLOOR -8.0f
 
 typedef struct Brain {
-    int slot, phase, age, cooldown, frames;
+    int slot, phase, age, cooldown, frames, approach;
     bool executing, saw_attack;
 } Brain;
 
-/* A launch only breaks the match when its peak is this high above the
- * floor, so small pops inside a combo keep playing. */
-#define APEX_MIN_HEIGHT 25.0f
+/* With nothing queued, a fighter runs in. The break comes as the gap
+ * closes past MEET_TRIGGER, still running; a fighter already inside
+ * MEET_STOP stands and waits. The auto run stays this far inside the
+ * edges. */
+#define MEET_TRIGGER 34.0f
+#define MEET_STOP 22.0f
+#define AUTO_EDGE (FD_EDGE - 12.0f)
+/* A launched fighter is chased, and the break comes when the chaser is
+ * this close. */
+#define CHASE_MEET 30.0f
+/* The chaser jumps only for a target this far overhead at most. */
+#define CHASE_JUMP 50.0f
+/* Frames a queued move spends closing to its reach before it goes anyway. */
+#define APPROACH_LIMIT 60
 
 static TacticsLoadout loadouts[2];
 static Brain brains[2];
 static bool active[2];
-static float apex_vy[2];
-static bool apex_seen[2];
+static bool chase_seen[2];
 
 void tactics_SetLoadout(int p, const TacticsLoadout* l)
 {
@@ -60,8 +70,7 @@ void tactics_ClearLoadouts(void)
 void tactics_BeginMatch(void)
 {
     memset(brains, 0, sizeof(brains));
-    memset(apex_vy, 0, sizeof(apex_vy));
-    memset(apex_seen, 0, sizeof(apex_seen));
+    memset(chase_seen, 0, sizeof(chase_seen));
 }
 
 void tactics_RestartQueues(void)
@@ -73,6 +82,7 @@ void tactics_RestartQueues(void)
         brains[p].phase = 0;
         brains[p].age = 0;
         brains[p].cooldown = 2;
+        brains[p].approach = 0;
         brains[p].executing = false;
         brains[p].saw_attack = false;
     }
@@ -168,40 +178,11 @@ static bool queueDone(int port)
     return !brains[port].executing && nextSlot(port) >= loadouts[port].count;
 }
 
-bool tactics_BreakInAction(void)
+static bool fighterPair(Fighter** fs)
 {
     HSD_GObj* g;
-    int seen = 0;
 
-    for (g = HSD_GObjPLinkHead[HSD_GOBJ_PLINK_FIGHTER]; g != NULL; g = g->next) {
-        Fighter* f = GET_FIGHTER(g);
-
-        if (f->player_id >= 2 || f->is_sub_fighter) {
-            continue;
-        }
-        if (!active[f->player_id]) {
-            return false;
-        }
-        seen++;
-        if (exchangeBusy(f) || !queueDone(f->player_id)) {
-            return false;
-        }
-    }
-    return seen >= 2;
-}
-
-static bool onStage(Fighter* f)
-{
-    return fabsf(f->cur_pos.x) <= FD_EDGE && f->cur_pos.y >= FD_FLOOR;
-}
-
-int tactics_LaunchApex(void)
-{
-    Fighter* fs[2] = { NULL, NULL };
-    HSD_GObj* g;
-    int hit = -1;
-    int p;
-
+    fs[0] = fs[1] = NULL;
     for (g = HSD_GObjPLinkHead[HSD_GOBJ_PLINK_FIGHTER]; g != NULL; g = g->next) {
         Fighter* f = GET_FIGHTER(g);
 
@@ -209,33 +190,68 @@ int tactics_LaunchApex(void)
             fs[f->player_id] = f;
         }
     }
-    if (fs[0] == NULL || fs[1] == NULL || !active[0] || !active[1]) {
+    return fs[0] != NULL && fs[1] != NULL && active[0] && active[1];
+}
+
+bool tactics_BreakInAction(void)
+{
+    Fighter* fs[2];
+
+    if (!fighterPair(fs)) {
+        return false;
+    }
+    if (exchangeBusy(fs[0]) || !queueDone(0) || exchangeBusy(fs[1]) || !queueDone(1)) {
+        return false;
+    }
+    {
+        /* Someone high overhead has to come down before they meet. */
+        float dx = fs[0]->cur_pos.x - fs[1]->cur_pos.x;
+        float dy = fs[0]->cur_pos.y - fs[1]->cur_pos.y;
+
+        return dx * dx + dy * dy <= MEET_TRIGGER * MEET_TRIGGER;
+    }
+}
+
+static bool onStage(Fighter* f)
+{
+    return fabsf(f->cur_pos.x) <= FD_EDGE && f->cur_pos.y >= FD_FLOOR;
+}
+
+int tactics_ChaseMeet(void)
+{
+    Fighter* fs[2];
+    int hit = -1;
+    int p;
+
+    if (!fighterPair(fs)) {
         return -1;
     }
     for (p = 0; p < 2; p++) {
         Fighter* v = fs[p];
         Fighter* a = fs[p ^ 1];
-        float vy;
+        float dx, dy;
 
         /* A fresh hit starts a fresh launch. */
         if (!tumbling(v) || v->dmg.x195c_hitlag_frames > 0.0f) {
-            apex_seen[p] = false;
-            apex_vy[p] = 0.0f;
+            chase_seen[p] = false;
             continue;
         }
-        vy = v->self_vel.y + v->x8c_kb_vel.y;
-        if (!apex_seen[p] && apex_vy[p] > 0.0f && vy <= 0.0f) {
-            apex_seen[p] = true;
-            /* Offstage the recovery is automatic, and a trade has no one
-             * free to follow up. */
-            if (hit < 0 && v->cur_pos.y > APEX_MIN_HEIGHT && onStage(v) && onStage(a) &&
-                !tumbling(a) && a->victim_gobj == NULL &&
-                a->dmg.x195c_hitlag_frames <= 0.0f)
-            {
-                hit = p;
-            }
+        if (chase_seen[p] || hit >= 0) {
+            continue;
         }
-        apex_vy[p] = vy;
+        /* Offstage the recovery is automatic, and a trade has no one free to
+         * follow up. */
+        if (!onStage(v) || !onStage(a) || tumbling(a) || a->victim_gobj != NULL ||
+            a->dmg.x195c_hitlag_frames > 0.0f || !queueDone(p ^ 1) || !actionable(a))
+        {
+            continue;
+        }
+        dx = v->cur_pos.x - a->cur_pos.x;
+        dy = v->cur_pos.y - a->cur_pos.y;
+        if (dx * dx + dy * dy <= CHASE_MEET * CHASE_MEET) {
+            chase_seen[p] = true;
+            hit = p;
+        }
     }
     return hit;
 }
@@ -255,6 +271,7 @@ static void beginMove(Fighter* f, Brain* b, int dir, int move, const TacticsMove
 {
     b->executing = true;
     b->age = 0;
+    b->approach = 0;
     b->phase = 1;
     b->saw_attack = false;
     switch (info->input) {
@@ -298,6 +315,64 @@ static void beginMove(Fighter* f, Brain* b, int dir, int move, const TacticsMove
         pad(f, move == TM_FTILT ? dir * 45 : 0,
             move == TM_UTILT ? 45 : move == TM_DTILT ? -60 : 0, HSD_PAD_A, 0, 0);
         break;
+    }
+}
+
+static bool running(Fighter* f)
+{
+    return inRange(f->motion_id, ftCo_MS_TurnRun, ftCo_MS_RunBrake);
+}
+
+/* A run only gives way to a dash attack, a grab, a jump or side B. Anything
+ * else crouches out of it first; every ground attack comes out of a crouch. */
+static bool needsStop(int move, const TacticsMoveInfo* info)
+{
+    return info->input == TI_GROUND || info->input == TI_SMASH ||
+           (info->input == TI_SPECIAL && move != TM_SIDE_B);
+}
+
+static float clampEdge(float x)
+{
+    return x > AUTO_EDGE ? AUTO_EDGE : x < -AUTO_EDGE ? -AUTO_EDGE : x;
+}
+
+/* Nothing queued: run in at a standing foe, or chase a launched one. The
+ * mode breaks before either reaches the other. */
+static void autoMove(Fighter* f, Fighter* enemy, Brain* b, bool air)
+{
+    float gx = clampEdge(enemy->cur_pos.x) - f->cur_pos.x;
+    float dy = enemy->cur_pos.y - f->cur_pos.y;
+    int gdir = gx >= 0 ? 1 : -1;
+
+    if (f->motion_id == ftCo_MS_KneeBend && tumbling(enemy)) {
+        f->cpu.buttons = HSD_PAD_X;
+        return;
+    }
+    if (!actionable(f) || tumbling(f)) {
+        return;
+    }
+    if (!tumbling(enemy)) {
+        if (fabsf(enemy->cur_pos.x - f->cur_pos.x) > MEET_STOP && fabsf(gx) > 4.0f) {
+            f->cpu.lstick.x = gdir * 127;
+        }
+        return;
+    }
+    if (air) {
+        f->cpu.lstick.x = fabsf(gx) > 4.0f ? gdir * 127 : 0;
+        /* Falling short of a target still overhead: spend the midair jump.
+         * Pressing only every other frame gives the button a fresh press. */
+        if (f->self_vel.y <= 0.0f && dy > 12.0f && dy < CHASE_JUMP &&
+            f->x1968_jumpsUsed < f->co_attrs.max_jumps && (b->frames & 1))
+        {
+            f->cpu.buttons = HSD_PAD_X;
+        }
+        return;
+    }
+    if (fabsf(gx) > 12.0f) {
+        f->cpu.lstick.x = gdir * 127;
+    } else if (dy > 18.0f && dy < CHASE_JUMP) {
+        /* Held through the jump squat, so it is a full hop. */
+        f->cpu.buttons = HSD_PAD_X;
     }
 }
 
@@ -360,6 +435,7 @@ void tactics_Think(Fighter_GObj* gobj)
         b->slot++;
     }
     if (!b->executing && b->slot >= l->count) {
+        autoMove(f, enemy, b, air);
         return;
     }
 
@@ -457,12 +533,25 @@ void tactics_Think(Fighter_GObj* gobj)
         f->cpu.lstick.x = dir * 50;
         return;
     }
+    /* A reaction was for the air. Landed before it could come out, it is
+     * gone. */
+    if (!air && info->ground.x0 > info->ground.x1) {
+        b->slot++;
+        return;
+    }
     {
         float reach = air ? info->air.x1 : info->ground.x1;
         int face;
 
-        if (fabsf(dx) > reach) {
-            pad(f, dir * 65, 0, 0, 0, 0);
+        /* Bodies can keep two fighters farther apart than a short reach.
+         * After a second of closing in, swing anyway. */
+        if (fabsf(dx) > reach && ++b->approach < APPROACH_LIMIT) {
+            /* Keep a run going rather than dropping to a walk. */
+            pad(f, dir * (running(f) ? 127 : 65), 0, 0, 0, 0);
+            return;
+        }
+        if (!air && running(f) && needsStop(move, info)) {
+            pad(f, 0, -127, 0, 0, 0);
             return;
         }
         face = info->facing == TF_BACK ? -dir : dir;

@@ -4,7 +4,9 @@
 /* Melee Tactics: short calls inside one real Melee stock. At each break you
  * pick one exchange, a single move or a two-move combo, from the options
  * that fit the frozen positions. The fighters play it on the real engine.
- * When the exchange ends, the match freezes again. That repeats until
+ * When the exchange ends, they run at each other and the match freezes again
+ * just before they meet; a launched fighter is chased, and the freeze comes
+ * just before the chaser reaches it. That repeats until
  * someone is knocked out (GM_TACTICS, tacticsmode.c).
  *
  * tacticsmoves.c  move catalogue: inputs, reach, names, draft weights
@@ -108,12 +110,11 @@ void tactics_ClearLoadouts(void);
 void tactics_BeginMatch(void);
 /// Play the current queues again from the first move. Positions are untouched.
 void tactics_RestartQueues(void);
-/// The port of a fighter launched into tumble that has just reached the top
-/// of its flight while the other fighter is free to follow up, or -1.
-/// Fires once per launch. Call once per sim tick while not planning.
-int tactics_LaunchApex(void);
-/// Both queues are spent and neither fighter is attacking, grabbed, in
-/// hitstun, or still recovering to the stage.
+/// The port of a fighter launched into tumble whose chaser is about to reach
+/// it, or -1. Fires once per launch. Call once per sim tick while not planning.
+int tactics_ChaseMeet(void);
+/// Both queues are spent, neither fighter is attacking, grabbed, in hitstun,
+/// or still recovering to the stage, and the two are about to meet.
 bool tactics_BreakInAction(void);
 /// True when this fighter is driven by a tactics bot instead of the CPU AI.
 bool tactics_Controls(Fighter* fp);
