@@ -8,7 +8,7 @@
 # fly's proxy terminates HTTPS, which the page needs for its threads, and
 # passes the signaling WebSocket through.
 app = "melee-tactics"
-primary_region = "sea"
+primary_region = "sjc"
 
 [build]
   dockerfile = "Dockerfile"
