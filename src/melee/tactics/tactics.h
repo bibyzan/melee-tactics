@@ -41,6 +41,9 @@ typedef enum TacticsMove {
     TM_BTHROW,
     TM_UTHROW,
     TM_DTHROW,
+    TM_AIRDODGE, ///< reactions: only offered to a launched fighter
+    TM_JUMP,
+    TM_DRIFT,
     TM_COUNT,
     TM_NONE = 0xFF,
 } TacticsMove;
@@ -53,6 +56,9 @@ typedef enum TacticsInput {
     TI_AERIAL,  ///< short hop from the ground, or directly in the air
     TI_SPECIAL, ///< B + left stick, ground or air
     TI_THROW,   ///< Z grab, then a stick direction once holding
+    TI_DODGE,   ///< R in the air, stick away from the foe
+    TI_JUMP,    ///< midair jump away from the foe
+    TI_DRIFT,   ///< hold away from the foe until landing
 } TacticsInput;
 
 /// Which way the fighter must face for the move to connect.
@@ -102,6 +108,10 @@ void tactics_ClearLoadouts(void);
 void tactics_BeginMatch(void);
 /// Play the current queues again from the first move. Positions are untouched.
 void tactics_RestartQueues(void);
+/// The port of a fighter launched into tumble that has just reached the top
+/// of its flight while the other fighter is free to follow up, or -1.
+/// Fires once per launch. Call once per sim tick while not planning.
+int tactics_LaunchApex(void);
 /// Both queues are spent and neither fighter is attacking, grabbed, in
 /// hitstun, or still recovering to the stage.
 bool tactics_BreakInAction(void);

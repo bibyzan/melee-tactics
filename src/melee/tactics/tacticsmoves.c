@@ -55,6 +55,13 @@ static const TacticsMoveInfo moves[TM_COUNT] = {
                     { 2, 13, -4, 12 }, NO_AIR },
     [TM_DTHROW] = { "Grab > Down Throw", TI_THROW, TF_FRONT, 7, { 3, 0, 0 },
                     { 2, 13, -4, 12 }, NO_AIR },
+    /* Reactions move away from the foe, so any distance will do. */
+    [TM_AIRDODGE] = { "Air Dodge Away", TI_DODGE, TF_ANY, 0, { 0, 0, 0 },
+                      NO_AIR, { 0, 999, -999, 999 } },
+    [TM_JUMP] = { "Jump Away", TI_JUMP, TF_ANY, 0, { 0, 0, 0 },
+                  NO_AIR, { 0, 999, -999, 999 } },
+    [TM_DRIFT] = { "Drift Away", TI_DRIFT, TF_ANY, 0, { 0, 0, 0 },
+                   NO_AIR, { 0, 999, -999, 999 } },
 };
 
 /// The shape of a special move, which sets its reach and draft weights.

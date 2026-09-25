@@ -43,6 +43,8 @@ static bool auto_started;
 static bool live, planning, auto_resume;
 static bool p2_cpu = true;
 static int settle, plan_port, plan_frames;
+/* The launched port during a mid-air break, or -1 at a normal break. */
+static int react_port = -1;
 static char result[96] = "Pick a 2-move exchange when the fight pauses. P2 can play itself.";
 
 enum {
@@ -139,6 +141,10 @@ static const char* moveName(int ckind, int move)
 
 static void optionLabel(char* buf, size_t n, int ckind, const Opt* opt)
 {
+    if (opt->a == TM_NONE) {
+        snprintf(buf, n, "Wait");
+        return;
+    }
     if (opt->b == TM_NONE) {
         snprintf(buf, n, "%s", moveName(ckind, opt->a));
         return;
@@ -209,6 +215,50 @@ static int buildOptions(int which, Opt* out, int cap)
         n = 1;
     }
     return n;
+}
+
+static int addMoves(int ckind, const u8* moves, int count, Opt* out, int n, int cap)
+{
+    int i;
+
+    for (i = 0; i < count && n < cap; i++) {
+        if (moves[i] == TM_NONE || tactics_MoveAllowed(ckind, moves[i])) {
+            out[n].a = moves[i];
+            out[n].b = TM_NONE;
+            n++;
+        }
+    }
+    return n;
+}
+
+/* The launched fighter at the top of its flight: get away, or swing. */
+static int buildReactOptions(int which, Opt* out, int cap)
+{
+    static const u8 react[] = { TM_AIRDODGE, TM_JUMP,  TM_DRIFT, TM_NAIR,
+                                TM_FAIR,     TM_BAIR,  TM_DAIR,  TM_UAIR };
+    Fighter* self = portFighter(which);
+    int n = 0;
+
+    if (self != NULL && self->x1968_jumpsUsed >= self->co_attrs.max_jumps) {
+        n = addMoves(draft[which].ckind, react, 1, out, n, cap);
+        return addMoves(draft[which].ckind, react + 2, 6, out, n, cap);
+    }
+    return addMoves(draft[which].ckind, react, 8, out, n, cap);
+}
+
+/* The attacker below a launched foe: chase it, cover the landing, or wait
+ * for the read. */
+static int buildChaseOptions(int which, Opt* out, int cap)
+{
+    static const u8 ground[] = { TM_UAIR, TM_NAIR, TM_FAIR, TM_BAIR,
+                                 TM_USMASH, TM_UTILT, TM_NONE };
+    static const u8 air[] = { TM_UAIR, TM_NAIR, TM_FAIR, TM_BAIR, TM_DAIR, TM_NONE };
+    Fighter* self = portFighter(which);
+
+    if (self != NULL && self->ground_or_air == GA_Air) {
+        return addMoves(draft[which].ckind, air, 6, out, 0, cap);
+    }
+    return addMoves(draft[which].ckind, ground, 7, out, 0, cap);
 }
 
 static Fighter* portFighter(int which)
@@ -325,25 +375,28 @@ static void showPlan(void)
     char buf[64];
     char label[64];
     int who = p2_cpu ? 0 : plan_port;
+    int foe = who ^ 1;
     int i;
 
     ensurePlanUi();
     if (!plan_ui) {
         return;
     }
-    snprintf(buf, sizeof(buf), "P1 %s  %d%%", tactics_FighterName(draft[0].ckind),
-             portPercent(0));
+    snprintf(buf, sizeof(buf), "P%d %s  %d%%", who + 1, tactics_FighterName(draft[who].ckind),
+             portPercent(who));
     setPlanLine(&plan_lines[LINE_TITLE], buf);
     setPlanColor(&plan_lines[LINE_TITLE], &col_gold);
-    if (p2_cpu && opt_n[1] > 0) {
-        optionLabel(label, sizeof(label), draft[1].ckind, &opts[1][opt_cursor[1]]);
-        snprintf(buf, sizeof(buf), "P2 %s CPU: %s", tactics_FighterName(draft[1].ckind),
-                 label);
-    } else if (!p2_cpu) {
-        snprintf(buf, sizeof(buf), "Choosing for P%d %s  %d%%", who + 1,
-                 tactics_FighterName(draft[who].ckind), portPercent(who));
+    /* Only the chooser's own list is shown. The other side's pick stays
+     * hidden until the exchange plays. */
+    if (react_port == who) {
+        snprintf(buf, sizeof(buf), "Launched! React before P%d follows up", foe + 1);
+    } else if (react_port == foe) {
+        snprintf(buf, sizeof(buf), "P%d %s %d%% at the peak. Read it!", foe + 1,
+                 tactics_FighterName(draft[foe].ckind), portPercent(foe));
     } else {
-        snprintf(buf, sizeof(buf), "P2 %s CPU", tactics_FighterName(draft[1].ckind));
+        snprintf(buf, sizeof(buf), "vs P%d %s  %d%%%s", foe + 1,
+                 tactics_FighterName(draft[foe].ckind), portPercent(foe),
+                 !p2_cpu && opt_locked[foe] ? "  (locked in)" : "");
     }
     setPlanLine(&plan_lines[LINE_SUB], buf);
     setPlanColor(&plan_lines[LINE_SUB], &col_white);
@@ -359,9 +412,13 @@ static void showPlan(void)
             setPlanLine(line, "");
         }
     }
-    setPlanLine(&plan_lines[LINE_HINT], p2_cpu
-                    ? "Up/Down choose    A or START play"
-                    : "Up/Down choose    X other fighter    A or START lock");
+    if (p2_cpu) {
+        setPlanLine(&plan_lines[LINE_HINT], "Up/Down choose    A or START play");
+    } else {
+        snprintf(buf, sizeof(buf), "Up/Down choose    A or START lock in    P%d look away",
+                 foe + 1);
+        setPlanLine(&plan_lines[LINE_HINT], buf);
+    }
     setPlanColor(&plan_lines[LINE_HINT], &col_dim);
 }
 
@@ -381,6 +438,7 @@ static void closeFight(void)
 {
     live = false;
     planning = false;
+    react_port = -1;
     settle = 0;
     destroyPlanUi();
 }
@@ -392,17 +450,31 @@ static void queueOption(int which, const Opt* opt)
 
     next.moves[0] = opt->a;
     next.moves[1] = opt->b;
-    next.count = opt->b == TM_NONE ? 1 : 2;
+    next.count = opt->a == TM_NONE ? 0 : opt->b == TM_NONE ? 1 : 2;
     draft[which] = next;
     tactics_SetLoadout(which, &next);
     optionLabel(label, sizeof(label), next.ckind, opt);
     pc_log_line("tactics: choose P%d %s", which + 1, label);
 }
 
+/* The CPU decides only when the exchange starts, so its row is never on
+ * screen. The lower of two rolls leans toward the top rows, which are the
+ * preferred ones. */
+static int cpuPick(int n)
+{
+    int a = rand() % n;
+    int b = rand() % n;
+
+    return a < b ? a : b;
+}
+
 static void commitPlan(void)
 {
     int p;
 
+    if (p2_cpu && opt_n[1] > 0) {
+        opt_cursor[1] = cpuPick(opt_n[1]);
+    }
     for (p = 0; p < 2; p++) {
         int pick = opt_cursor[p];
 
@@ -416,14 +488,26 @@ static void commitPlan(void)
     }
     tactics_RestartQueues();
     planning = false;
+    react_port = -1;
     hidePlanText();
     pc_log_line("tactics: resume");
 }
 
-static void openPlan(void)
+/* launched: the port at the peak of a launch, or -1 for a normal break. */
+static void openPlan(int launched)
 {
-    opt_n[0] = buildOptions(0, opts[0], OPT_CAP);
-    opt_n[1] = buildOptions(1, opts[1], OPT_CAP);
+    int p;
+
+    react_port = launched;
+    for (p = 0; p < 2; p++) {
+        if (launched < 0) {
+            opt_n[p] = buildOptions(p, opts[p], OPT_CAP);
+        } else if (p == launched) {
+            opt_n[p] = buildReactOptions(p, opts[p], OPT_CAP);
+        } else {
+            opt_n[p] = buildChaseOptions(p, opts[p], OPT_CAP);
+        }
+    }
     opt_cursor[0] = 0;
     opt_cursor[1] = 0;
     opt_locked[0] = false;
@@ -432,8 +516,8 @@ static void openPlan(void)
     plan_frames = 0;
     settle = 0;
     planning = true;
-    pc_log_line("tactics: planning p1=%d p2=%d options=%d", portPercent(0),
-                portPercent(1), opt_n[0]);
+    pc_log_line("tactics: planning p1=%d p2=%d options=%d launched=%d", portPercent(0),
+                portPercent(1), opt_n[0], launched);
     showPlan();
 }
 
@@ -455,15 +539,22 @@ void tactics_MatchFrame(void)
     if (gm_GetMatchOutcome() != OUTCOME_NONE) {
         if (planning) {
             planning = false;
+            react_port = -1;
             hidePlanText();
         }
         settle = 0;
         return;
     }
     if (!planning) {
+        int launched = tactics_LaunchApex();
+
+        if (launched >= 0) {
+            openPlan(launched);
+            return;
+        }
         if (tactics_BreakInAction()) {
             if (++settle >= PLAN_SETTLE) {
-                openPlan();
+                openPlan(-1);
             }
         } else {
             settle = 0;
@@ -479,9 +570,6 @@ void tactics_MatchFrame(void)
     }
     if (opt_n[who] > 0 && (keys & PAD_ANY_DOWN)) {
         opt_cursor[who] = (opt_cursor[who] + 1) % opt_n[who];
-    }
-    if (!p2_cpu && (keys & PAD_BUTTON_X)) {
-        plan_port = 1 - plan_port;
     }
     if (auto_resume && plan_frames >= PLAN_AUTO_FRAMES) {
         commitPlan();

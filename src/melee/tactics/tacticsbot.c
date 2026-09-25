@@ -22,9 +22,15 @@ typedef struct Brain {
     bool executing, saw_attack;
 } Brain;
 
+/* A launch only breaks the match when its peak is this high above the
+ * floor, so small pops inside a combo keep playing. */
+#define APEX_MIN_HEIGHT 25.0f
+
 static TacticsLoadout loadouts[2];
 static Brain brains[2];
 static bool active[2];
+static float apex_vy[2];
+static bool apex_seen[2];
 
 void tactics_SetLoadout(int p, const TacticsLoadout* l)
 {
@@ -54,6 +60,8 @@ void tactics_ClearLoadouts(void)
 void tactics_BeginMatch(void)
 {
     memset(brains, 0, sizeof(brains));
+    memset(apex_vy, 0, sizeof(apex_vy));
+    memset(apex_seen, 0, sizeof(apex_seen));
 }
 
 void tactics_RestartQueues(void)
@@ -81,10 +89,22 @@ static bool inRange(int s, int lo, int hi)
     return s >= lo && s <= hi;
 }
 
+static bool tumbling(Fighter* f)
+{
+    int s = f->motion_id;
+
+    return f->ground_or_air == GA_Air &&
+           (inRange(s, ftCo_MS_DamageFlyHi, ftCo_MS_DamageFlyRoll) || s == ftCo_MS_DamageFall);
+}
+
 static bool actionable(Fighter* f)
 {
     int s = f->motion_id;
 
+    /* Once hitstun ends, a launched fighter can act out of tumble. */
+    if (tumbling(f) && !f->x221C_b6 && f->dmg.x195c_hitlag_frames <= 0.0f) {
+        return true;
+    }
     return inRange(s, ftCo_MS_Wait, ftCo_MS_RunBrake) ||
            inRange(s, ftCo_MS_JumpF, ftCo_MS_FallAerialB) ||
            s == ftCo_MS_SquatWait || s == ftCo_MS_OttottoWait;
@@ -170,6 +190,56 @@ bool tactics_BreakInAction(void)
     return seen >= 2;
 }
 
+static bool onStage(Fighter* f)
+{
+    return fabsf(f->cur_pos.x) <= FD_EDGE && f->cur_pos.y >= FD_FLOOR;
+}
+
+int tactics_LaunchApex(void)
+{
+    Fighter* fs[2] = { NULL, NULL };
+    HSD_GObj* g;
+    int hit = -1;
+    int p;
+
+    for (g = HSD_GObjPLinkHead[HSD_GOBJ_PLINK_FIGHTER]; g != NULL; g = g->next) {
+        Fighter* f = GET_FIGHTER(g);
+
+        if (f->player_id < 2 && !f->is_sub_fighter) {
+            fs[f->player_id] = f;
+        }
+    }
+    if (fs[0] == NULL || fs[1] == NULL || !active[0] || !active[1]) {
+        return -1;
+    }
+    for (p = 0; p < 2; p++) {
+        Fighter* v = fs[p];
+        Fighter* a = fs[p ^ 1];
+        float vy;
+
+        /* A fresh hit starts a fresh launch. */
+        if (!tumbling(v) || v->dmg.x195c_hitlag_frames > 0.0f) {
+            apex_seen[p] = false;
+            apex_vy[p] = 0.0f;
+            continue;
+        }
+        vy = v->self_vel.y + v->x8c_kb_vel.y;
+        if (!apex_seen[p] && apex_vy[p] > 0.0f && vy <= 0.0f) {
+            apex_seen[p] = true;
+            /* Offstage the recovery is automatic, and a trade has no one
+             * free to follow up. */
+            if (hit < 0 && v->cur_pos.y > APEX_MIN_HEIGHT && onStage(v) && onStage(a) &&
+                !tumbling(a) && a->victim_gobj == NULL &&
+                a->dmg.x195c_hitlag_frames <= 0.0f)
+            {
+                hit = p;
+            }
+        }
+        apex_vy[p] = vy;
+    }
+    return hit;
+}
+
 static void pad(Fighter* f, int x, int y, unsigned buttons, int cx, int cy)
 {
     f->cpu.lstick.x = x;
@@ -213,6 +283,16 @@ static void beginMove(Fighter* f, Brain* b, int dir, int move, const TacticsMove
         break;
     case TI_THROW:
         pad(f, 0, 0, HSD_PAD_Z, 0, 0);
+        break;
+    case TI_DODGE:
+        pad(f, -dir * 127, 40, HSD_PAD_R, 0, 0);
+        break;
+    case TI_JUMP:
+        pad(f, -dir * 127, 0, f->x1968_jumpsUsed < f->co_attrs.max_jumps ? HSD_PAD_X : 0, 0,
+            0);
+        break;
+    case TI_DRIFT:
+        pad(f, -dir * 127, 0, 0, 0, 0);
         break;
     default:
         pad(f, move == TM_FTILT ? dir * 45 : 0,
@@ -292,13 +372,26 @@ void tactics_Think(Fighter_GObj* gobj)
     }
     if (b->executing) {
         b->age++;
-        if ((info->input == TI_AERIAL && air && f->motion_id >= ftCo_MS_AttackAirN) ||
-            (info->input != TI_AERIAL &&
-             (inRange(f->motion_id, ftCo_MS_Attack11, ftCo_MS_AttackAirLw) ||
-              inRange(f->motion_id, ftCo_MS_Catch, ftCo_MS_ThrowLw) ||
-              f->motion_id >= ftCo_MS_Count)))
-        {
-            b->saw_attack = true;
+        switch (info->input) {
+        case TI_AERIAL:
+            b->saw_attack |= air && f->motion_id >= ftCo_MS_AttackAirN;
+            break;
+        case TI_DODGE:
+            b->saw_attack |= f->motion_id == ftCo_MS_EscapeAir;
+            break;
+        case TI_JUMP:
+            /* Out of jumps, this is a drift. */
+            b->saw_attack |= inRange(f->motion_id, ftCo_MS_JumpAerialF, ftCo_MS_JumpAerialB) ||
+                             !air;
+            break;
+        case TI_DRIFT:
+            b->saw_attack |= !air;
+            break;
+        default:
+            b->saw_attack |= inRange(f->motion_id, ftCo_MS_Attack11, ftCo_MS_AttackAirLw) ||
+                             inRange(f->motion_id, ftCo_MS_Catch, ftCo_MS_ThrowLw) ||
+                             f->motion_id >= ftCo_MS_Count;
+            break;
         }
         if ((b->saw_attack && actionable(f)) || b->age > 150) {
             b->executing = false;
@@ -313,8 +406,23 @@ void tactics_Think(Fighter_GObj* gobj)
                 move == TM_UTHROW ? 127 : move == TM_DTHROW ? -127 : 0, 0, 0, 0);
             return;
         }
+        if (info->input == TI_JUMP || info->input == TI_DRIFT) {
+            f->cpu.lstick.x = -dir * 127;
+            return;
+        }
         if (info->input == TI_AERIAL && b->phase == 0) {
+            float dy = enemy->cur_pos.y - f->cur_pos.y;
+
+            /* A target far overhead gets a full hop, and the swing waits
+             * until the rise brings it into reach. */
             if (!air) {
+                if (dy > info->ground.y1) {
+                    pad(f, 0, 0, HSD_PAD_X, 0, 0);
+                }
+                return;
+            }
+            if (dy > info->air.y1 && f->self_vel.y > 0.0f && b->age < 45) {
+                f->cpu.lstick.x = dir * 60;
                 return;
             }
             b->phase = 1;
