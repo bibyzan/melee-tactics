@@ -196,6 +196,7 @@ set(PC_SOURCES
         src/pc/misc.c
         src/pc/os.c
         src/pc/region.c
+        src/pc/render_scale.c
         src/pc/slp.c
         src/pc/slp_format.c
         src/pc/stb_vorbis.c

@@ -259,6 +259,7 @@ func isolated(next http.Handler) http.Handler {
 func main() {
 	mime.AddExtensionType(".wasm", "application/wasm")
 	mime.AddExtensionType(".mjs", "text/javascript")
+	mime.AddExtensionType(".webmanifest", "application/manifest+json")
 
 	port := envOr("PORT", "8080")
 	webDir = envOr("WEB_DIR", webDir)

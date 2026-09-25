@@ -4,6 +4,13 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
 <meta name="theme-color" content="#0b0b10">
+<!-- Added to the home screen, the page opens full screen with no browser bars:
+     the only way to get them out of the way on an iPhone. -->
+<link rel="manifest" href="./manifest.webmanifest">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Melee Tactics">
 <title>Melee Tactics</title>
 <link rel="icon" href="data:,">
 <style>
@@ -18,6 +25,7 @@
   #pick:has(input:disabled) { opacity: 0.5; cursor: progress; }
   #pick input { display: none; }
   #welcome p { color: #9a9ab0; font-size: 13px; margin-top: 16px; }
+  #ios-tip { color: #e0b030; }
 
   /* The game, alone on a desktop. */
   #stage { display: none; width: min(100vw, calc(100vh * 4 / 3)); }
@@ -30,7 +38,8 @@
   body.touch { overscroll-behavior: none; -webkit-user-select: none; user-select: none;
                -webkit-touch-callout: none; touch-action: none; }
   body.touch.playing { height: 100dvh; overflow: hidden; }
-  body.touch #stage { width: 100vw; height: 100dvh; place-items: center; }
+  body.touch #stage { width: 100vw; height: 100dvh; place-items: center;
+                      padding-top: env(safe-area-inset-top); box-sizing: border-box; }
   body.touch .pad { display: flex; align-items: center; justify-content: center; width: 100%; height: 100%; }
   /* Landscape: the game at full height, controls in the bands either side.
      Portrait: the game at full width, controls in the space below. Either
@@ -46,8 +55,11 @@
     body.touch #stage { grid-template: "game game" auto "left right" 1fr / 1fr 1fr; }
     body.touch #game { width: 100vw; }
   }
-  #pad-left { grid-area: left; }
-  #pad-right { grid-area: right; }
+  /* Clear of the notch and the home indicator. */
+  #pad-left { grid-area: left; padding-left: env(safe-area-inset-left);
+              padding-bottom: env(safe-area-inset-bottom); box-sizing: border-box; }
+  #pad-right { grid-area: right; padding-right: env(safe-area-inset-right);
+               padding-bottom: env(safe-area-inset-bottom); box-sizing: border-box; }
 
   .dpad { position: relative; width: var(--pad); aspect-ratio: 1; border-radius: 50%;
           background: radial-gradient(circle, #23232e 55%, #1a1a22 56%); touch-action: none; }
@@ -78,6 +90,7 @@
   <h1>MELEE TACTICS</h1>
   <label id="pick">Choose your Melee ISO<input id="disc" type="file" accept=".iso,.gcm" disabled></label>
   <p>Super Smash Bros. Melee, NTSC 1.02 (GALE01). It stays on this device, and the page remembers it for next time.</p>
+  <p id="ios-tip" hidden>For full screen on iPhone: tap Share, then Add to Home Screen, and open Melee Tactics from there.</p>
 </div>
 <main id="stage">
   <div class="pad" id="pad-left"></div>

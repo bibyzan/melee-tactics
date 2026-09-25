@@ -23,6 +23,7 @@
 #include <melee/lb/lblanguage.h>
 #include <pc/link.h>
 #include <pc/pc.h>
+#include <pc/render_scale.h>
 #include <sysdolphin/baselib/gobj.h>
 #include <sysdolphin/baselib/gobjgxlink.h>
 #include <sysdolphin/baselib/gobjplink.h>
@@ -1012,15 +1013,44 @@ static void startFight(void)
     gm_801A4B60();
 }
 
+/* The internal resolution steps the main menu offers; 0 is "match the
+ * window" (native only, where the launcher can leave it there). */
+static const float render_steps[] = { 1.0f, 1.5f, 2.0f, 3.0f, 4.0f };
+#define RENDER_STEPS ((int) (sizeof render_steps / sizeof render_steps[0]))
+
+static void stepRenderScale(int delta)
+{
+    float now = pc_render_scale();
+    int i, at = 0;
+
+    for (i = 0; i < RENDER_STEPS; i++) {
+        if (render_steps[i] <= now + 0.01f) {
+            at = i;
+        }
+    }
+    at = (at + delta + RENDER_STEPS) % RENDER_STEPS;
+    pc_set_render_scale(render_steps[at]);
+    pc_log_line("tactics: resolution %.1fx", render_steps[at]);
+}
+
 static void mainMenu(u64 keys, OnlineLobbyView* view)
 {
-    int rows = tactics_NetAvailable() ? MAIN_ROWS : 1;
+    bool has_online = tactics_NetAvailable();
+    int res_row = has_online ? 2 : 1;
+    int rows = res_row + 1;
+    int delta = (keys & PAD_ANY_RIGHT) ? 1 : (keys & PAD_ANY_LEFT) ? -1 : 0;
     bool pick = (keys & (PAD_CONFIRM | PAD_BUTTON_START)) != 0;
+    float scale;
 
     moveCursor(keys, rows);
     if (scripted() != NULL && screen_frames == 30) {
         cursor = scriptedOnline() != NULL ? 1 : 0;
         pick = true;
+    }
+    /* The resolution row changes with Left/Right (or A), and stays here. */
+    if (cursor == res_row && (delta != 0 || pick)) {
+        stepRenderScale(delta != 0 ? delta : 1);
+        pick = false;
     }
     if (pick) {
         menu_note[0] = '\0';
@@ -1032,13 +1062,21 @@ static void mainMenu(u64 keys, OnlineLobbyView* view)
         gm_801A4B60();
         return;
     }
+    scale = pc_render_scale();
     view->title = "MELEE TACTICS";
     snprintf(view->subtitle, sizeof view->subtitle, "1 stock, until a knockout");
     snprintf(view->menu[0], sizeof view->menu[0], "VS CPU");
     snprintf(view->menu[1], sizeof view->menu[1], "ONLINE");
+    if (scale <= 0.0f) {
+        snprintf(view->menu[res_row], sizeof view->menu[res_row], "RESOLUTION: Auto");
+    } else {
+        snprintf(view->menu[res_row], sizeof view->menu[res_row], "RESOLUTION: %gx (%dx%d)", scale,
+                 (int) (640 * scale), (int) (480 * scale));
+    }
     view->menu_count = rows;
-    snprintf(view->message, sizeof view->message, "%s", result);
-    view->hint = "Up/Down choose   A select";
+    snprintf(view->message, sizeof view->message, "%s",
+             cursor == res_row ? "Lower it if the game runs choppy." : result);
+    view->hint = cursor == res_row ? "Left/Right change   B back" : "Up/Down choose   A select";
 }
 
 /* The draft against the CPU, or against a second player on this machine. */

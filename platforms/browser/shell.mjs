@@ -48,13 +48,38 @@ for (const [key, value] of params) {
 const touch = wantsTouch(params);
 document.body.classList.toggle('touch', touch);
 
+// Browser bars. On an iPhone the page cannot hide Safari's (fullscreen is for
+// video only there), but opened from the home screen it has none, so say so.
+// Where fullscreen exists (Android, iPad), the first touch on the game asks.
+const standalone = matchMedia('(display-mode: fullscreen), (display-mode: standalone)').matches ||
+  navigator.standalone === true;
+const ios = /iPhone|iPad|iPod/.test(navigator.userAgent) ||
+  (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+if (ios && !standalone) $('ios-tip').hidden = false;
+if (touch && !standalone) {
+  $('stage').addEventListener('pointerdown', () => {
+    const root = document.documentElement;
+    const ask = root.requestFullscreen || root.webkitRequestFullscreen;
+    try {
+      ask?.call(root)?.catch?.(() => {});
+    } catch {}
+  }, { once: true });
+}
+
 // The upscale: the engine draws Melee's 640x480 frame at this multiple, then
-// fits it to the canvas. 3x on a desktop, 2x on a touch screen, whose GPU pays
-// more for every pixel; ?scale=1..4 picks one.
+// fits it to the canvas. ?scale= wins, then the RESOLUTION the player last set
+// in the game's main menu (render_scale.c keeps it here), then 3x on a desktop
+// and 1x on a touch screen, whose GPU pays most for every pixel.
 function renderScale() {
-  const forced = Math.round(Number(params.get('scale')));
-  if (forced >= 1 && forced <= 4) return forced;
-  return touch ? 2 : 3;
+  const valid = (n) => Number.isFinite(n) && n >= 1 && n <= 4;
+  const forced = Number(params.get('scale'));
+  if (valid(forced)) return forced;
+  let saved = NaN;
+  try {
+    saved = Number(localStorage.getItem('melee-render-scale'));
+  } catch {}
+  if (valid(saved)) return saved;
+  return touch ? 1 : 3;
 }
 
 // ---- the disc ------------------------------------------------------------
