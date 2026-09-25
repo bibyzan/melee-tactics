@@ -163,6 +163,12 @@ if (crossOriginIsolated) {
   script.src = './melee_browser.js';
   script.onerror = () => status('melee_browser.js is missing: run tools/browser/build.py first.');
   document.head.append(script);
+} else if (!isSecureContext) {
+  // Plain HTTP on a LAN address: the browser withholds threads. localhost is
+  // exempt; for another machine, Chrome can be told to trust this address.
+  status(`Browsers only run this game on a secure address. In Chrome, open ` +
+    `chrome://flags/#unsafely-treat-insecure-origin-as-secure, add ${location.origin}, ` +
+    `enable it and relaunch.`);
 } else if (navigator.serviceWorker && !sessionStorage.getItem('melee-coi-reload')) {
   sessionStorage.setItem('melee-coi-reload', '1');
   navigator.serviceWorker.register('./coi-sw.js')

@@ -940,7 +940,8 @@ static void netDraftFrame(void)
             cycleFighter(0, delta);
         }
         if (((keys & PAD_CONFIRM) && cursor == 1) || (keys & PAD_BUTTON_START) ||
-            (frames == 120 && getenv("MELEE_TACTICS_AUTOSTART")))
+            (getenv("MELEE_TACTICS_AUTOSTART") &&
+             frames == (getenv("MELEE_TACTICS_READY_FRAME") ? atoi(getenv("MELEE_TACTICS_READY_FRAME")) : 120)))
         {
             online_ready = true;
         }

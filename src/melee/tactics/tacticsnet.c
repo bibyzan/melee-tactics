@@ -41,7 +41,7 @@ typedef struct Break {
 } Break;
 
 static struct {
-    bool on, host, lobby_done, hello_sent, desync;
+    bool on, host, lobby_done, hello_sent, got_hello, desync;
     int my_ckind, their_ckind;
     u32 seed;
     Break brk;
@@ -126,17 +126,7 @@ static void onMessage(const u8* m, int len)
             return;
         }
         N.their_ckind = m[2];
-        if (N.host && N.hello_sent) {
-            u8 r[7];
-
-            pc_link_random(&N.seed, sizeof N.seed);
-            r[0] = 'M';
-            put32(r + 1, N.seed);
-            r[5] = (u8) N.my_ckind;
-            r[6] = (u8) N.their_ckind;
-            pc_link_send(r, sizeof r);
-            N.lobby_done = true;
-        }
+        N.got_hello = true;
         return;
     case 'M':
         if (len < 7 || N.host) {
@@ -217,8 +207,24 @@ bool tactics_NetLobby(int my_ckind, u32* seed, int* p1_ckind, int* p2_ckind)
         setStatus(N.host ? "Connected. Waiting for the other player"
                          : "Connected. Waiting for the host");
     }
+    tactics_NetPoll();
+    /* The host starts the match once both sides are ready, whichever was
+     * ready first. */
+    if (N.host && N.got_hello && !N.lobby_done) {
+        u8 r[7];
+
+        if (!pc_link_random(&N.seed, sizeof N.seed)) {
+            setStatus("No secure random source for the seed");
+            return false;
+        }
+        r[0] = 'M';
+        put32(r + 1, N.seed);
+        r[5] = (u8) N.my_ckind;
+        r[6] = (u8) N.their_ckind;
+        pc_link_send(r, sizeof r);
+        N.lobby_done = true;
+    }
     if (!N.lobby_done) {
-        tactics_NetPoll();
         return false;
     }
     *seed = N.seed;
