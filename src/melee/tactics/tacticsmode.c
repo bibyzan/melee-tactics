@@ -1028,9 +1028,14 @@ static void stepRenderScale(int delta)
             at = i;
         }
     }
-    at = (at + delta + RENDER_STEPS) % RENDER_STEPS;
-    pc_set_render_scale(render_steps[at]);
+    /* Clamped, not wrapped: Left from the lowest must never jump to 4x,
+     * which a phone may not be able to render at all. */
+    at += delta;
+    if (at < 0 || at >= RENDER_STEPS) {
+        return;
+    }
     pc_log_line("tactics: resolution %.1fx", render_steps[at]);
+    pc_set_render_scale(render_steps[at]);
 }
 
 static void mainMenu(u64 keys, OnlineLobbyView* view)

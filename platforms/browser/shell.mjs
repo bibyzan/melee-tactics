@@ -82,6 +82,43 @@ function renderScale() {
   return touch ? 1 : 3;
 }
 
+// A saved resolution the device cannot run must not lock the player out: if
+// the game stops, or draws nothing for a while after starting, forget it and
+// reload once at the default. True when that is what happens.
+function resetResolution() {
+  let saved = null;
+  try {
+    saved = localStorage.getItem('melee-render-scale');
+    if (!saved || Number(saved) <= 1 || params.get('scale') || sessionStorage.getItem('melee-scale-reset')) {
+      return false;
+    }
+    localStorage.removeItem('melee-render-scale');
+    sessionStorage.setItem('melee-scale-reset', '1');
+  } catch {
+    return false;
+  }
+  log(`The game did not start at ${saved}x; going back to the default resolution.`);
+  status('That resolution is too much for this device. Going back to the default…');
+  setTimeout(() => location.reload(), 1500);
+  return true;
+}
+
+// The game counts as started once it draws. Shader preparation on a first
+// visit can take a while, so the clock runs from when that is done, up to
+// 90 seconds in all.
+let prepared = false;
+function watchStart(since) {
+  setTimeout(() => {
+    if (frames.count >= 30) {
+      try { sessionStorage.removeItem('melee-scale-reset'); } catch {}
+    } else if (prepared || Date.now() - since > 90000) {
+      resetResolution();
+    } else {
+      watchStart(since);
+    }
+  }, 20000);
+}
+
 // ---- the disc ------------------------------------------------------------
 
 const DISC = 'melee.iso';
@@ -172,9 +209,13 @@ window.Module = {
   print: log,
   printErr: log,
   onFrame,
-  onAbort: (reason) => status(`The game stopped: ${reason}. Reload the page to start again.`),
-  onGraphicsPreparation: (done, total) =>
-    status(done === total ? '' : `Preparing graphics… ${Math.floor(done * 100 / total)}%`),
+  onAbort: (reason) => {
+    if (!resetResolution()) status(`The game stopped: ${reason}. Reload the page to start again.`);
+  },
+  onGraphicsPreparation: (done, total) => {
+    if (done === total) prepared = true;
+    status(done === total ? '' : `Preparing graphics… ${Math.floor(done * 100 / total)}%`);
+  },
   onRuntimeInitialized: () => { ready = true; begin(); },
 };
 
@@ -210,6 +251,7 @@ async function begin() {
     status('');
     $('canvas').focus();
     Module.callMain([]);
+    watchStart(Date.now());
   } catch (error) {
     status(error.message);
     log(error.stack || error);
