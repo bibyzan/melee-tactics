@@ -1600,8 +1600,16 @@ bool pc_net_active(void) {
  * it to suppress the handful of retail behaviours that are deliberately
  * seeded from the local machine (see gmTitle_801A165C). Offline play keeps
  * every one of them. */
+/* Set while a mode keeps two machines in step by its own means (Melee Tactics
+ * exchanges only its picks, src/melee/tactics/tacticssync.c). */
+static bool s_external_sync;
+
+void pc_net_set_external_sync(bool on) {
+    s_external_sync = on;
+}
+
 bool pc_net_deterministic(void) {
-    return net.active || record_active() || net.synctest;
+    return net.active || record_active() || net.synctest || s_external_sync;
 }
 
 int pc_net_local_player(void) {

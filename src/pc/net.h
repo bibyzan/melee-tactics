@@ -41,6 +41,9 @@ bool pc_net_chat_available(void);
 /* True when the simulation must be reproducible elsewhere: netplay,
  * record, replay or sync test. Guards machine-seeded retail behaviour. */
 bool pc_net_deterministic(void);
+/* A mode that keeps two machines in step without the rollback session (Melee
+ * Tactics) turns pc_net_deterministic() on for its match. */
+void pc_net_set_external_sync(bool on);
 bool pc_net_pure_load(const char* filename); /* served from memory, no barrier */
 
 /* Netplay scene hand-off: true while the scene that asked to end must keep

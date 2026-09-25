@@ -143,6 +143,47 @@ bool tactics_AiKnows(Fighter* fp, int move);
 /// with both fighters' motion predicted to that frame.
 bool tactics_AiConnects(Fighter* fp, Fighter* target, int move);
 
+/* tacticssync.c */
+/// Start a match. With on, the fight runs from seed so that another machine
+/// given the same seed and the same picks plays it identically.
+void tactics_SyncBegin(u32 seed, bool on);
+void tactics_SyncEnd(void);
+bool tactics_Synced(void);
+/// Once per sim tick, last thing before the fighters run: starts the fight's
+/// clock when both are out of their entry, then reseeds every tick that is
+/// not frozen.
+void tactics_SyncFrame(bool frozen);
+/// Ticks simulated since the fight went live, or -1 before.
+s32 tactics_SyncTick(void);
+/// Random numbers for the tactics layer's own choices: seeded and shared
+/// while synced, rand() otherwise.
+u32 tactics_SyncRand(void);
+/// A hash of both fighters' state and the game RNG.
+u32 tactics_SyncChecksum(void);
+/// Count a break and log its checksum; returns the break number (0 when not
+/// synced).
+int tactics_SyncBreak(void);
+
+/* tacticsnet.c: a match against another machine over pc_link */
+/// A link was asked for (MELEE_LINK_*, or the browser page's room).
+bool tactics_NetOn(void);
+/// 0 on the host (P1), 1 on the guest (P2).
+int tactics_NetLocalPort(void);
+/// What to tell the player about the connection.
+const char* tactics_NetStatus(void);
+bool tactics_NetClosed(void);
+void tactics_NetPoll(void);
+/// The draft's handshake: true once both sides agreed on the match.
+bool tactics_NetLobby(int my_ckind, u32* seed, int* p1_ckind, int* p2_ckind);
+/// Start break n: forget the last break's picks.
+void tactics_NetBreak(int n);
+/// Commit this machine's pick (-1: not choosing) with the break's checksum.
+void tactics_NetSendPick(int pick, u32 sum);
+/// True once the other side's pick is revealed and verified (-1: not choosing).
+bool tactics_NetTheirPick(int* pick);
+/// This side has committed and the other side's reveal is still out.
+bool tactics_NetWaiting(void);
+
 /* tacticsmode.c */
 /// True while the match is held for the next exchange.
 bool tactics_IsPlanning(void);

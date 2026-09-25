@@ -26,6 +26,7 @@
 #include <sysdolphin/baselib/gobjgxlink.h>
 #include <sysdolphin/baselib/gobjplink.h>
 #include <sysdolphin/baselib/hsd_3915.h>
+#include <sysdolphin/baselib/random.h>
 #include <sysdolphin/baselib/sislib.h>
 
 /* Short, because the fighters are running in while it counts. */
@@ -46,6 +47,14 @@ static TacticsLoadout draft[2] = {
 static int cursor, frames;
 static bool auto_started;
 static bool live, planning, auto_resume;
+/* How long a scripted run holds each break; varying it checks that the
+ * pause itself changes nothing. */
+static int auto_frames = PLAN_AUTO_FRAMES;
+/* A match against another machine (tacticsnet.c). net is set for the fight
+ * once the lobby agreed on the seed and both fighters. */
+static bool online, online_ready, online_agreed;
+static u32 online_seed, brk_sum;
+static int online_ckind[2];
 static bool p2_cpu = true;
 static int settle, plan_port, plan_frames, idle, since_plan;
 /* The launched port during a mid-air break, or -1 at a normal break. */
@@ -404,6 +413,25 @@ static void showPlan(void)
     if (!plan_ui) {
         return;
     }
+    /* Online, with nothing (left) to choose here: the other side is still
+     * picking. */
+    if (online && (who < 0 || opt_locked[who])) {
+        who = tactics_NetLocalPort();
+        snprintf(buf, sizeof(buf), "P%d %s  %d%%", who + 1,
+                 tactics_FighterName(draft[who].ckind), portPercent(who));
+        setPlanLine(&plan_lines[LINE_TITLE], buf);
+        setPlanColor(&plan_lines[LINE_TITLE], &col_gold);
+        setPlanLine(&plan_lines[LINE_SUB], tactics_NetClosed() ? tactics_NetStatus()
+                                           : opt_locked[who] && choosing[who]
+                                               ? "Locked in. Waiting for the other player..."
+                                               : "The other player is choosing...");
+        setPlanColor(&plan_lines[LINE_SUB], &col_white);
+        for (i = 0; i < OPT_CAP; i++) {
+            setPlanLine(&plan_lines[LINE_OPT + i], "");
+        }
+        setPlanLine(&plan_lines[LINE_HINT], "");
+        return;
+    }
     snprintf(buf, sizeof(buf), "P%d %s  %d%%", who + 1, tactics_FighterName(draft[who].ckind),
              portPercent(who));
     setPlanLine(&plan_lines[LINE_TITLE], buf);
@@ -434,7 +462,9 @@ static void showPlan(void)
             setPlanLine(line, "");
         }
     }
-    if (p2_cpu || !choosing[foe]) {
+    if (online) {
+        setPlanLine(&plan_lines[LINE_HINT], "Up/Down choose    A or START lock in");
+    } else if (p2_cpu || !choosing[foe]) {
         setPlanLine(&plan_lines[LINE_HINT], "Up/Down choose    A or START play");
     } else {
         snprintf(buf, sizeof(buf), "Up/Down choose    A or START lock in    P%d look away",
@@ -484,8 +514,8 @@ static void queueOption(int which, const Opt* opt)
  * preferred ones. */
 static int cpuPick(int n)
 {
-    int a = rand() % n;
-    int b = rand() % n;
+    int a = (int) (tactics_SyncRand() % (u32) n);
+    int b = (int) (tactics_SyncRand() % (u32) n);
 
     return a < b ? a : b;
 }
@@ -499,8 +529,9 @@ static void commitPlan(void)
     if (p2_cpu && choosing[1] && opt_n[1] > 0) {
         opt_cursor[1] = cpuPick(opt_n[1]);
     }
-    /* A scripted run exercises the whole list, not just the top row. */
-    if (auto_resume && choosing[0] && opt_n[0] > 0) {
+    /* A scripted run exercises the whole list, not just the top row. Online,
+     * each side already chose its own. */
+    if (!online && auto_resume && choosing[0] && opt_n[0] > 0) {
         opt_cursor[0] = cpuPick(opt_n[0]);
     }
     for (p = 0; p < 2; p++) {
@@ -508,7 +539,8 @@ static void commitPlan(void)
 
         if (!choosing[p] || opt_n[p] <= 0) {
             continue;
-        }        if (pick < 0 || pick >= opt_n[p]) {
+        }
+        if (pick < 0 || pick >= opt_n[p]) {
             pick = 0;
         }
         queueOption(p, &opts[p][pick]);
@@ -544,7 +576,9 @@ static void openPlan(int launched, const bool* picks)
         choosing[p] = picks[p];
         opt_n[p] = 0;
         opt_cursor[p] = 0;
-        opt_locked[p] = !picks[p] || (p == 1 && p2_cpu);
+        /* Online, the other side's port is chosen over there. */
+        opt_locked[p] = !picks[p] || (p == 1 && p2_cpu) ||
+                        (online && p != tactics_NetLocalPort());
         if (!picks[p]) {
             continue;
         }
@@ -569,7 +603,20 @@ static void openPlan(int launched, const bool* picks)
                     a && b ? b->cur_pos.x - a->cur_pos.x : 0.0f,
                     a && b ? b->cur_pos.y - a->cur_pos.y : 0.0f);
     }
+    brk_sum = tactics_SyncChecksum();
+    p = tactics_SyncBreak();
     plan_port = nextChooser();
+    /* Online, a break always waits for the other side's reveal, even when
+     * there is nothing to choose here. */
+    if (online) {
+        tactics_NetBreak(p);
+        if (plan_port < 0) {
+            tactics_NetSendPick(-1, brk_sum);
+        }
+        planning = true;
+        showPlan();
+        return;
+    }
     if (plan_port < 0) {
         commitPlan();
         return;
@@ -578,19 +625,87 @@ static void openPlan(int launched, const bool* picks)
     showPlan();
 }
 
+/* A break online: this side picks for its own port, then both wait for the
+ * other side's reveal (tacticsnet.c). */
+static void netPlanFrame(void)
+{
+    int local = tactics_NetLocalPort();
+    int theirs;
+
+    if (tactics_NetClosed()) {
+        if (auto_resume) {
+            pc_log_line("tactics: scripted run lost the other player, exiting");
+            exit(3);
+        }
+        showPlan();
+        return;
+    }
+    if (plan_port == local && !opt_locked[local]) {
+        u64 keys = gm_GetButtonsTriggered(4);
+        bool lock = (keys & (PAD_CONFIRM | PAD_BUTTON_START)) != 0;
+
+        if (opt_n[local] > 0 && (keys & PAD_ANY_UP)) {
+            opt_cursor[local] = (opt_cursor[local] + opt_n[local] - 1) % opt_n[local];
+        }
+        if (opt_n[local] > 0 && (keys & PAD_ANY_DOWN)) {
+            opt_cursor[local] = (opt_cursor[local] + 1) % opt_n[local];
+        }
+        /* A scripted run picks at random, from this machine's own rand():
+         * the shared generator must advance the same on both sides. */
+        if (auto_resume && plan_frames >= auto_frames && opt_n[local] > 0) {
+            opt_cursor[local] = rand() % opt_n[local];
+            lock = true;
+        }
+        if (lock) {
+            opt_locked[local] = true;
+            tactics_NetSendPick(opt_cursor[local], brk_sum);
+        }
+    }
+    if (tactics_NetTheirPick(&theirs)) {
+        int remote = local ^ 1;
+
+        if (choosing[remote]) {
+            opt_cursor[remote] = theirs >= 0 && theirs < opt_n[remote] ? theirs : 0;
+        }
+        commitPlan();
+        return;
+    }
+    showPlan();
+}
+
 bool tactics_IsPlanning(void)
 {
     return planning;
 }
 
+static void matchFrame(void);
+
 void tactics_MatchFrame(void)
 {
-    u64 keys;
-    int who;
+    s32 t;
 
     if (!live) {
         return;
     }
+    matchFrame();
+    /* Last, so the reseed is what the fighters' procs draw from this tick. */
+    tactics_SyncFrame(planning);
+    t = tactics_SyncTick();
+    if (t >= 0 && t < 400 && !planning && getenv("MELEE_TACTICS_DEBUG") != NULL) {
+        Fighter* a = portFighter(0);
+        Fighter* b = portFighter(1);
+
+        pc_log_line("tactics: tick=%d sum=%08X p1=%d,%.2f p2=%d,%.2f", t,
+                    tactics_SyncChecksum(), a ? a->motion_id : -1, a ? a->cur_pos.x : 0.0f,
+                    b ? b->motion_id : -1, b ? b->cur_pos.x : 0.0f);
+    }
+}
+
+static void matchFrame(void)
+{
+    u64 keys;
+    int who;
+
     /* A knockout ends the match. Drop the menu so
      * the victory sequence can play. */
     if (gm_GetMatchOutcome() != OUTCOME_NONE) {
@@ -642,6 +757,10 @@ void tactics_MatchFrame(void)
     }
 
     plan_frames++;
+    if (online) {
+        netPlanFrame();
+        return;
+    }
     who = plan_port;
     keys = gm_GetButtonsTriggered(4);
     if (opt_n[who] > 0 && (keys & PAD_ANY_UP)) {
@@ -650,7 +769,7 @@ void tactics_MatchFrame(void)
     if (opt_n[who] > 0 && (keys & PAD_ANY_DOWN)) {
         opt_cursor[who] = (opt_cursor[who] + 1) % opt_n[who];
     }
-    if (auto_resume && plan_frames >= PLAN_AUTO_FRAMES) {
+    if (auto_resume && plan_frames >= auto_frames) {
         commitPlan();
         return;
     }
@@ -671,8 +790,15 @@ static void enterBattle(GameModeState* state)
     bool scripted = getenv("MELEE_TACTICS_AUTOSTART") != NULL;
     int i;
 
+    /* Online, the lobby settled the fighters and the seed. */
+    online = online_agreed;
+    if (online) {
+        draft[0].ckind = online_ckind[0];
+        draft[1].ckind = online_ckind[1];
+        p2_cpu = false;
+    }
     /* A scripted run can pick its fighters by character kind number. */
-    for (i = 0; i < 2; i++) {
+    for (i = 0; i < 2 && !online; i++) {
         const char* pick = getenv(i == 0 ? "MELEE_TACTICS_P1" : "MELEE_TACTICS_P2");
         int ckind = pick != NULL ? atoi(pick) : -1;
 
@@ -712,6 +838,20 @@ static void enterBattle(GameModeState* state)
     planning = false;
     settle = 0;
     auto_resume = scripted;
+    if (getenv("MELEE_TACTICS_AUTO_FRAMES") != NULL) {
+        auto_frames = atoi(getenv("MELEE_TACTICS_AUTO_FRAMES"));
+    }
+    /* Online the match is synced from the lobby's seed. MELEE_TACTICS_SEED
+     * plays an offline match the same way, for testing; otherwise offline play
+     * keeps the machine-seeded retail behaviour. */
+    if (online) {
+        tactics_SyncBegin(online_seed, true);
+    } else {
+        tactics_SyncBegin(getenv("MELEE_TACTICS_SEED") != NULL
+                              ? (u32) strtoul(getenv("MELEE_TACTICS_SEED"), NULL, 0)
+                              : 0,
+                          getenv("MELEE_TACTICS_SEED") != NULL);
+    }
     tactics_BeginMatch();
     gm_LoadAnnouncer();
     pc_log_line("tactics: battle %s vs %s", tactics_FighterName(draft[0].ckind),
@@ -731,6 +871,8 @@ static void exitBattle(GameModeState* state)
         snprintf(result, sizeof(result), "Draw!");
     }
     pc_log_line("tactics: result %s frames=%u", result, end->frame_count);
+    tactics_SyncEnd();
+    online = online_agreed = online_ready = false;
     closeFight();
     tactics_ClearLoadouts();
     gm_SetNextGameModeStateId(0);
@@ -772,12 +914,82 @@ static void cycleFighter(int which, int delta)
     } while (draft[which].ckind == CKind_PopoNana);
 }
 
+/* The draft against another machine: each side picks only its own fighter,
+ * and the host's seed starts the match once both are ready. */
+static void netDraftFrame(void)
+{
+    u64 keys = gm_GetButtonsTriggered(4);
+    OnlineLobbyView view = { 0 };
+    const char* mine = getenv("MELEE_TACTICS_P1");
+    int local = tactics_NetLocalPort();
+    int delta;
+
+    frames++;
+    /* For scripted runs, MELEE_TACTICS_P1 is this side's own fighter. */
+    if (frames == 1 && mine != NULL && atoi(mine) >= 0 && atoi(mine) < CKind_Playable_Count &&
+        atoi(mine) != CKind_PopoNana)
+    {
+        draft[0].ckind = atoi(mine);
+    }
+    if (!online_ready) {
+        if (keys & PAD_ANY_UP || keys & PAD_ANY_DOWN) {
+            cursor = cursor == 0 ? 1 : 0;
+        }
+        delta = (keys & PAD_ANY_RIGHT) ? 1 : (keys & PAD_ANY_LEFT) ? -1 : 0;
+        if (delta != 0 && cursor == 0) {
+            cycleFighter(0, delta);
+        }
+        if (((keys & PAD_CONFIRM) && cursor == 1) || (keys & PAD_BUTTON_START) ||
+            (frames == 120 && getenv("MELEE_TACTICS_AUTOSTART")))
+        {
+            online_ready = true;
+        }
+    }
+    if (keys & PAD_CANCEL) {
+        pc_log_line("tactics: left the online draft");
+        gm_ChangeGameModeAfterCurrentScene(GM_MENU);
+        gm_801A4B60();
+        return;
+    }
+    if (online_ready) {
+        int c1, c2;
+
+        if (tactics_NetLobby(draft[0].ckind, &online_seed, &c1, &c2)) {
+            online_ckind[0] = c1;
+            online_ckind[1] = c2;
+            online_agreed = true;
+            auto_started = true;
+            gm_801A4B60();
+            return;
+        }
+    } else {
+        tactics_NetPoll();
+    }
+    view.title = "MELEE TACTICS ONLINE";
+    view.screen = LOBBY_SCREEN_MENU;
+    view.cursor = online_ready ? -1 : cursor;
+    view.menu_count = 2;
+    snprintf(view.subtitle, sizeof(view.subtitle), "You are P%d (%s)", local + 1,
+             local == 0 ? "host" : "guest");
+    snprintf(view.menu[0], sizeof(view.menu[0]), "Your fighter: %s",
+             tactics_FighterName(draft[0].ckind));
+    snprintf(view.menu[1], sizeof(view.menu[1]), online_ready ? "READY - waiting" : "READY");
+    snprintf(view.message, sizeof(view.message), "%s",
+             tactics_NetStatus()[0] != '\0' ? tactics_NetStatus() : "Connecting...");
+    view.hint = "Left/Right fighter   START ready   B leave";
+    mnOnlineLobby_Update(&view);
+}
+
 void tactics_DraftFrame(void)
 {
     u64 keys = gm_GetButtonsTriggered(4);
     OnlineLobbyView view = { 0 };
     int delta;
 
+    if (tactics_NetOn()) {
+        netDraftFrame();
+        return;
+    }
     frames++;
     if (keys & PAD_ANY_UP) {
         cursor = (cursor + MENU_ROWS - 1) % MENU_ROWS;
