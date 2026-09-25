@@ -44,15 +44,23 @@
   /* Landscape: the game at full height, controls in the bands either side.
      Portrait: the game at full width, controls in the space below. Either
      way the pads are sized from the space the game leaves. */
+  /* The side columns are minmax(0, 1fr), not 1fr: a plain 1fr cannot shrink
+     below its content, so the notch padding on one side made that column
+     wider and pushed the game and the other pad off centre. The notch inset
+     (--inset, whichever side it is on) is taken out before the game and the
+     pads are sized, so both bands stay equal and the pads fit inside them. */
   @media (orientation: landscape) {
-    body.touch { --game: min(calc(100dvh * 4 / 3), calc(100vw - 240px));
-                 --pad: min(calc((100vw - var(--game)) / 2 * 0.92), 80dvh, 260px); }
-    body.touch #stage { grid-template: "left game right" 100dvh / 1fr var(--game) 1fr; }
+    body.touch { --inset: max(env(safe-area-inset-left), env(safe-area-inset-right));
+                 --game: min(calc(100dvh * 4 / 3), calc(100vw - 2 * var(--inset) - 240px));
+                 --pad: min(calc(((100vw - var(--game)) / 2 - var(--inset)) * 0.9), 80dvh, 260px); }
+    body.touch #stage { grid-template: "left game right" 100dvh / minmax(0, 1fr) var(--game) minmax(0, 1fr); }
     body.touch #game { width: var(--game); }
+    body.touch #pad-left { padding-left: var(--inset); }
+    body.touch #pad-right { padding-right: var(--inset); }
   }
   @media (orientation: portrait) {
     body.touch { --pad: min(44vw, calc((100dvh - 75vw) * 0.85), 260px); }
-    body.touch #stage { grid-template: "game game" auto "left right" 1fr / 1fr 1fr; }
+    body.touch #stage { grid-template: "game game" auto "left right" 1fr / minmax(0, 1fr) minmax(0, 1fr); }
     body.touch #game { width: 100vw; }
   }
   /* Clear of the notch and the home indicator. */
