@@ -53,9 +53,9 @@ try {
       for (const [k, v] of Object.entries({ MELEE_SEED: '1', MELEE_SCENE_LOG: '1', ...test.env })) url.searchParams.set(k, v);
       await page.goto(url.href);
       await page.locator('#disc').setInputFiles(iso);
-      await page.waitForFunction(() => !document.querySelector('#start').disabled, null, { timeout: 60000 });
+      await page.waitForFunction(() => !document.querySelector('#cpu').disabled, null, { timeout: 60000 });
       const started = Date.now();
-      await page.locator('#start').click();
+      await page.locator('#cpu').click();
       await page.waitForFunction(() => window.meleeFrames.count >= 300, null, { timeout: 180000 });
       result.bootMs = Date.now() - started;
       for (const key of test.keys || []) {

@@ -1,0 +1,9 @@
+# Host builds and logs: the image builds its own, and build/ is large.
+build/
+build-*/
+*.log
+.git/
+# Never send a disc image to the builder.
+*.iso
+*.gcm
+*.rvz

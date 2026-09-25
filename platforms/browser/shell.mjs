@@ -2,6 +2,7 @@
 // Minimal host page for the browser build: disc picker, canvas, persistence.
 // The engine's whole host interface is the handful of Module fields set here.
 import { createDiscCache } from './disc-cache.mjs';
+import { createLink } from './link.mjs';
 
 const $ = (id) => document.getElementById(id);
 const lines = [];
@@ -37,10 +38,15 @@ function syncfs(populate) {
 
 // Any MELEE_* query parameter becomes an environment variable, so the knobs in
 // docs/testing.md work unchanged: ?MELEE_BOOT_SCENE=vs&MELEE_SEED=1
-const ENV = {};
-for (const [key, value] of new URLSearchParams(location.search)) {
+// This page is Melee Tactics: it boots into the tactics draft unless told
+// otherwise.
+const ENV = { MELEE_BOOT_SCENE: 'tactics' };
+const params = new URLSearchParams(location.search);
+for (const [key, value] of params) {
   if (/^MELEE_[A-Z0-9_]+$/.test(key)) ENV[key] = value;
 }
+// ?room=CODE joins the other player's room.
+const joinRoom = params.get('room');
 
 window.Module = {
   // preRun is the one point where this works: Emscripten has created ENV but
@@ -59,19 +65,74 @@ window.Module = {
 // Not `typeof Module.callMain`: that exists as soon as the script runs, while
 // the wasm is still compiling, and a disc picked by then started a dead runtime.
 let ready = false;
+const buttons = ['cpu', 'create', 'join'];
+if (joinRoom) {
+  $('join').hidden = false;
+  $('join').textContent = `Join room ${joinRoom}`;
+}
+// Local testing only: with ?dev_disc=1 the page streams the disc a local
+// server was started with (DEV_DISC), by range requests, instead of asking
+// for a file in every tab. It reads like a File: size and slice().
+let devDisc = null;
+if (params.get('dev_disc')) {
+  fetch('./dev/disc', { method: 'HEAD' }).then((res) => {
+    if (!res.ok) throw Error('this server was started without DEV_DISC');
+    const size = Number(res.headers.get('Content-Length'));
+    devDisc = {
+      size,
+      name: 'dev-disc.iso',
+      slice: (start, end) => ({
+        arrayBuffer: async () =>
+          (await fetch('./dev/disc', { headers: { Range: `bytes=${start}-${end - 1}` } })).arrayBuffer(),
+      }),
+    };
+    $('disc').hidden = true;
+    updateStart();
+  }).catch((error) => status(`No dev disc: ${error.message}`));
+}
+
 function updateStart() {
-  $('start').disabled = !(ready && $('disc').files.length);
+  for (const id of buttons) $(id).disabled = !(ready && (devDisc || $('disc').files.length));
 }
 $('disc').addEventListener('change', updateStart);
 
-$('start').addEventListener('click', async () => {
-  $('start').disabled = true;
+// ICE servers come from the page server, so a deployment can add TURN
+// without a new build.
+async function iceServers() {
+  try {
+    const config = await (await fetch('./config')).json();
+    if (Array.isArray(config.iceServers)) return config.iceServers;
+  } catch {}
+  return [{ urls: 'stun:stun.l.google.com:19302' }];
+}
+
+function roomCode() {
+  const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  return Array.from(crypto.getRandomValues(new Uint8Array(6)), (b) => alphabet[b % alphabet.length]).join('');
+}
+
+$('cpu').addEventListener('click', () => start(null));
+$('create').addEventListener('click', async () => {
+  const room = roomCode();
+  const url = `${location.origin}${location.pathname}?room=${room}`;
+  $('share-link').href = url;
+  $('share-link').textContent = url;
+  $('share').hidden = false;
+  start(createLink({ room, host: true, iceServers: await iceServers(), log }));
+});
+$('join').addEventListener('click', async () =>
+  start(createLink({ room: joinRoom, host: false, iceServers: await iceServers(), log })));
+
+async function start(link) {
+  for (const id of buttons) $(id).disabled = true;
   $('disc').disabled = true;
+  // The engine polls this through link_web.c; none means offline.
+  Module.tacticsLink = link;
   try {
     // The engine reports adapter and device failures itself (onAbort); this
     // only catches the common case early, before anything is mounted.
     if (!navigator.gpu) throw Error('This browser has no WebGPU. Try a current Chrome or Edge.');
-    Module.discFile = $('disc').files[0];
+    Module.discFile = devDisc || $('disc').files[0];
     Module.readDisc = createDiscCache(Module.discFile).read;
     for (const dir of ['/saves', '/cache']) {
       Module.FS.mkdirTree(dir);
@@ -90,7 +151,7 @@ $('start').addEventListener('click', async () => {
     status(error.message);
     log(error.stack || error);
   }
-});
+}
 
 // Threads need a cross-origin isolated page. Where the server cannot send
 // COOP/COEP (GitHub Pages), coi-sw.js adds them and the page reloads once

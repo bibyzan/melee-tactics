@@ -48,6 +48,23 @@ A break only waits for the players who have a choice. If only the CPU has one, i
 
 The menus offer normals, aerials, grabs with a throw, and each character's specials (Zelda and Sheik cannot transform). Ice Climbers are left out until the partner can share the controller policy.
 
+## Play online in the browser
+
+One Docker image serves the browser build (`platforms/browser`, WebGPU) and the small server in `server/` that pairs two players. Each player loads their own disc in the page. Nothing from the disc is in the image or goes over the network.
+
+```
+docker build -t melee-tactics .
+docker run --rm -p 8080:8080 melee-tactics
+```
+
+Open `http://localhost:8080`, choose the disc, and press **Create room**. Send the link it shows to the other player, who opens it and presses **Join room**. Each side picks its own fighter in the draft. The match starts when both are ready. **Play vs CPU** plays offline.
+
+How it stays in sync: both browsers run the same match from a seed the host picks, so the only thing sent is the picks. The server introduces the two browsers over a WebSocket (`/ws`), and they then talk directly over a WebRTC data channel, so the server is out of the match. A pick is sent as a hash first and revealed only once both sides have committed, so neither side can see the other's pick early. Each break also compares a checksum of the fight to catch a desync.
+
+The page needs a secure origin for its threads. `localhost` works over plain HTTP. Another machine on the LAN needs HTTPS: start the server with `TLS_CERT` and `TLS_KEY`, for example a certificate from `mkcert`. On fly.io (`fly.toml`), fly's proxy provides HTTPS. Keep one machine there, because rooms live in the server's memory. `ICE_SERVERS` adds TURN for players behind strict NATs.
+
+For local testing, `DEV_DISC=/path/in/container.iso`, with the image mounted read-only, lets the page stream the disc (`?dev_disc=1`) instead of asking for it in every tab. Native builds can play each other the same way over TCP with `MELEE_LINK_LISTEN=<port>` and `MELEE_LINK_CONNECT=<host:port>`.
+
 ## Build on Windows
 
 Requires MSYS2 UCRT64 GCC, CMake, Ninja, and Python. Put `C:/msys64/ucrt64/bin` on `PATH`, then from this repository:

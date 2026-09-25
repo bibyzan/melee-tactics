@@ -1,0 +1,39 @@
+# Melee Tactics on fly.io: the image from ./Dockerfile serves the browser
+# build and the WebRTC signaling (server/). Rename `app` to one you own, then
+#   fly launch --copy-config --no-deploy   (once)
+#   fly deploy
+#   fly scale count 1
+# Rooms live in the server's memory, so both players must reach the same
+# machine: run exactly one until rooms move to shared storage.
+# fly's proxy terminates HTTPS, which the page needs for its threads, and
+# passes the signaling WebSocket through.
+app = "melee-tactics"
+primary_region = "sea"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  PORT = "8080"
+  # Add TURN here for players behind strict NATs, e.g.
+  # ICE_SERVERS = '[{"urls":"stun:stun.l.google.com:19302"},{"urls":"turn:turn.example:3478","username":"u","credential":"p"}]'
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  # Signaling is only needed while two players connect; an idle machine can
+  # stop. A room lives in memory, so keep one machine when rooms are open.
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 0
+
+  [[http_service.checks]]
+    grace_period = "5s"
+    interval = "30s"
+    method = "GET"
+    path = "/healthz"
+    timeout = "5s"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "256mb"
