@@ -28,6 +28,10 @@ function onFrame() {
   }
   frames.last = now;
   frames.count++;
+  // Drawing: this launch worked (see BOOT_PENDING).
+  if (frames.count === 30) {
+    try { localStorage.removeItem('melee-boot-pending'); } catch {}
+  }
 }
 
 function syncfs(populate) {
@@ -70,6 +74,19 @@ if (touch && !standalone) {
 // fits it to the canvas. ?scale= wins, then the RESOLUTION the player last set
 // in the game's main menu (render_scale.c keeps it here), then 3x on a desktop
 // and 1x on a touch screen, whose GPU pays most for every pixel.
+// A launch that never drew anything leaves this behind; the next visit then
+// drops the saved resolution, in case that was the cause.
+const BOOT_PENDING = 'melee-boot-pending';
+try {
+  if (localStorage.getItem(BOOT_PENDING)) {
+    localStorage.removeItem(BOOT_PENDING);
+    if (localStorage.getItem('melee-render-scale')) {
+      localStorage.removeItem('melee-render-scale');
+      console.log('The last launch never drew; back to the default resolution.');
+    }
+  }
+} catch {}
+
 function renderScale() {
   const valid = (n) => Number.isFinite(n) && n >= 1 && n <= 4;
   const forced = Number(params.get('scale'));
@@ -110,6 +127,7 @@ let prepared = false;
 function watchStart(since) {
   setTimeout(() => {
     if (frames.count >= 30) {
+      try { localStorage.removeItem(BOOT_PENDING); } catch {}
       try { sessionStorage.removeItem('melee-scale-reset'); } catch {}
     } else if (prepared || Date.now() - since > 90000) {
       resetResolution();
@@ -234,7 +252,14 @@ async function begin() {
       Module.FS.mkdirTree(dir);
       Module.FS.mount(Module.FS.filesystems.IDBFS, { autoPersist: dir === '/saves' }, dir);
     }
-    await syncfs(true);
+    // Saved data (settings, the graphics cache) must not hold the start up:
+    // Safari on iOS can stop answering IndexedDB after a page was reloaded
+    // mid-write, until Safari is closed.
+    const loaded = await Promise.race([
+      syncfs(true).then(() => true, (error) => { log(`Saved data unavailable: ${error.message}`); return true; }),
+      new Promise((resolve) => setTimeout(() => resolve(false), 8000)),
+    ]);
+    if (!loaded) log('Saved data did not load in time; starting without it this visit.');
     // The pipeline cache is written by a background thread; flush it when
     // the page is hidden rather than on every write.
     document.addEventListener('visibilitychange', () => {
@@ -251,6 +276,7 @@ async function begin() {
     status('');
     $('canvas').focus();
     Module.callMain([]);
+    try { localStorage.setItem(BOOT_PENDING, '1'); } catch {}
     watchStart(Date.now());
   } catch (error) {
     status(error.message);
