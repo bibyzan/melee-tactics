@@ -19,7 +19,7 @@
 
 typedef struct Brain {
     int slot, phase, age, cooldown, frames, approach;
-    bool executing, saw_attack, teched;
+    bool executing, saw_attack, teched, connected, forced;
 } Brain;
 
 /* With nothing queued, a fighter runs in. The break comes as the gap
@@ -29,9 +29,14 @@ typedef struct Brain {
 #define MEET_TRIGGER 34.0f
 #define MEET_STOP 22.0f
 #define AUTO_EDGE (FD_EDGE - 12.0f)
-/* A launched fighter is chased, and the break comes when the chaser is
- * this close. */
-#define CHASE_MEET 30.0f
+/* A launched fighter is chased. The break comes when the two are predicted
+ * to come within CHASE_REACH in the next CHASE_LEAD frames; a grounded
+ * chaser's jump covers CHASE_HOP of the height. */
+#define CHASE_LEAD 16
+#define CHASE_REACH 24.0f
+#define CHASE_HOP 22.0f
+/* Frames an airborne aerial waits for the swing to line up. */
+#define AIR_WAIT 30
 /* The chaser jumps only for a target this far overhead at most. */
 #define CHASE_JUMP 50.0f
 /* Frames a queued move spends closing to its reach before it goes anyway. */
@@ -164,10 +169,10 @@ static bool exchangeBusy(Fighter* f)
     if (s == ftCo_MS_CliffWait || s == ftCo_MS_DownWaitU || s == ftCo_MS_DownWaitD) {
         return false;
     }
-    if (fabsf(f->cur_pos.x) > FD_EDGE || f->cur_pos.y < FD_FLOOR) {
-        return true;
-    }
-    return false;
+    /* Standing or teetering near the ledge is still on the stage; only the
+     * air out there is the recovery. */
+    return f->ground_or_air == GA_Air &&
+           (fabsf(f->cur_pos.x) > FD_EDGE || f->cur_pos.y < FD_FLOOR);
 }
 
 static int nextSlot(int port)
@@ -221,7 +226,70 @@ bool tactics_BreakInAction(void)
 
 static bool onStage(Fighter* f)
 {
-    return fabsf(f->cur_pos.x) <= FD_EDGE && f->cur_pos.y >= FD_FLOOR;
+    return f->ground_or_air == GA_Ground ||
+           (fabsf(f->cur_pos.x) <= FD_EDGE && f->cur_pos.y >= FD_FLOOR);
+}
+
+static bool still(Fighter* f)
+{
+    return fabsf(f->pos_delta.x) + fabsf(f->pos_delta.y) < 0.05f;
+}
+
+bool tactics_BothIdle(void)
+{
+    Fighter* fs[2];
+
+    return fighterPair(fs) && queueDone(0) && queueDone(1) && actionable(fs[0]) &&
+           actionable(fs[1]) && still(fs[0]) && still(fs[1]);
+}
+
+/* Where f will be in t frames if it keeps moving as it is: a straight line,
+ * plus gravity down to its fall speed in the air, stopping on the stage.
+ * Close enough for the dozen or so frames a swing needs. */
+static void project(Fighter* f, int t, float* x, float* y)
+{
+    float vy = f->pos_delta.y;
+    int i;
+
+    *x = f->cur_pos.x + f->pos_delta.x * (float) t;
+    *y = f->cur_pos.y;
+    if (f->ground_or_air != GA_Air) {
+        return;
+    }
+    for (i = 0; i < t; i++) {
+        vy -= f->co_attrs.gravity;
+        if (vy < -f->co_attrs.terminal_velocity) {
+            vy = -f->co_attrs.terminal_velocity;
+        }
+        *y += vy;
+    }
+    if (*y < 0.0f && fabsf(*x) <= FD_EDGE) {
+        *y = 0.0f;
+    }
+}
+
+/* The chaser is about to reach the launched fighter: within the next
+ * CHASE_LEAD frames the two come within CHASE_REACH, with a grounded chaser's
+ * jump counted in. Breaking this early leaves room for the jump squat and the
+ * startup, and the bot times the swing itself. */
+static bool chaseArriving(Fighter* a, Fighter* v)
+{
+    float lift = a->ground_or_air == GA_Air ? 0.0f : CHASE_HOP;
+    int t;
+
+    for (t = 0; t <= CHASE_LEAD; t++) {
+        float ax, ay, vx, vy, dx, dy;
+
+        project(a, t, &ax, &ay);
+        project(v, t, &vx, &vy);
+        dx = vx - ax;
+        dy = vy - ay;
+        dy = dy > lift ? dy - lift : dy > 0.0f ? 0.0f : dy;
+        if (dx * dx + dy * dy <= CHASE_REACH * CHASE_REACH) {
+            return true;
+        }
+    }
+    return false;
 }
 
 int tactics_AirBreak(bool* picks)
@@ -243,7 +311,6 @@ int tactics_AirBreak(bool* picks)
         Fighter* v = fs[p];
         Fighter* a = fs[p ^ 1];
         bool chaser_free, meet, react;
-        float dx, dy;
 
         /* A fresh hit starts a fresh launch. */
         if (!tumbling(v) || v->dmg.x195c_hitlag_frames > 0.0f) {
@@ -257,9 +324,7 @@ int tactics_AirBreak(bool* picks)
         /* A trade has no one free to follow up. */
         chaser_free = onStage(a) && !tumbling(a) && a->victim_gobj == NULL &&
                       a->dmg.x195c_hitlag_frames <= 0.0f && queueDone(p ^ 1) && actionable(a);
-        dx = v->cur_pos.x - a->cur_pos.x;
-        dy = v->cur_pos.y - a->cur_pos.y;
-        meet = !chase_seen[p] && chaser_free && dx * dx + dy * dy <= CHASE_MEET * CHASE_MEET;
+        meet = !chase_seen[p] && chaser_free && chaseArriving(a, v);
         /* The launched fighter picks only once it can act, so its pick comes
          * out right away: when hitstun ends, or when the chaser arrives
          * after that. */
@@ -293,6 +358,7 @@ static void beginMove(Fighter* f, Brain* b, int dir, int move, const TacticsMove
     b->executing = true;
     b->age = 0;
     b->approach = 0;
+    b->connected = false;
     b->phase = 1;
     b->saw_attack = false;
     switch (info->input) {
@@ -337,6 +403,57 @@ static void beginMove(Fighter* f, Brain* b, int dir, int move, const TacticsMove
             move == TM_UTILT ? 45 : move == TM_DTILT ? -60 : 0, HSD_PAD_A, 0, 0);
         break;
     }
+}
+
+/* An aerial started now would meet the foe: where both will be when its
+ * hitbox comes out is inside the move's air zone, with a little slack. */
+static bool swingLands(Fighter* f, Fighter* enemy, const TacticsMoveInfo* info)
+{
+    float fx, fy, ex, ey, x, y;
+
+    project(f, info->startup, &fx, &fy);
+    project(enemy, info->startup, &ex, &ey);
+    x = ex - fx;
+    y = ey - fy;
+    if (info->facing == TF_FRONT) {
+        x *= f->facing_dir;
+    } else if (info->facing == TF_BACK) {
+        x *= -f->facing_dir;
+    } else {
+        x = fabsf(x);
+    }
+    return x >= info->air.x0 - 4.0f && x <= info->air.x1 + 4.0f && y >= info->air.y0 - 6.0f &&
+           y <= info->air.y1 + 6.0f;
+}
+
+/* Melee's own CPU attack selector decides when the character has the move in
+ * its tables; the generic zone is the fallback. */
+static bool swingConnects(Fighter* f, Fighter* enemy, int move, const TacticsMoveInfo* info)
+{
+    if (tactics_AiKnows(f, move)) {
+        return tactics_AiConnects(f, enemy, move);
+    }
+    return swingLands(f, enemy, info);
+}
+
+/* Hold an airborne aerial until it lines up, drifting to where the foe is
+ * headed. True while holding. Gives up after AIR_WAIT frames, or just before
+ * landing, where the swing would be lost. */
+static bool holdSwing(Fighter* f, Fighter* enemy, Brain* b, int move, const TacticsMoveInfo* info)
+{
+    float ex, ey;
+
+    if (swingConnects(f, enemy, move, info)) {
+        b->forced = false;
+        return false;
+    }
+    if (++b->approach >= AIR_WAIT || (f->cur_pos.y < 6.0f && f->pos_delta.y < 0.0f)) {
+        b->forced = true;
+        return false;
+    }
+    project(enemy, info->startup, &ex, &ey);
+    f->cpu.lstick.x = fabsf(ex - f->cur_pos.x) > 3.0f ? (ex > f->cur_pos.x ? 127 : -127) : 0;
+    return true;
 }
 
 static bool running(Fighter* f)
@@ -417,6 +534,7 @@ void tactics_Think(Fighter_GObj* gobj)
         }
     }
     pad(f, 0, 0, 0, 0, 0);
+    tactics_DumpAi(f);
     if (enemy == NULL) {
         return;
     }
@@ -505,7 +623,15 @@ void tactics_Think(Fighter_GObj* gobj)
                              f->motion_id >= ftCo_MS_Count;
             break;
         }
+        b->connected |= b->saw_attack && enemy->dmg.x195c_hitlag_frames > 0.0f;
         if ((b->saw_attack && actionable(f)) || b->age > 150) {
+            if (info->input <= TI_THROW) {
+                pc_log_line("tactics: P%d %s %s%s", f->player_id + 1, info->name,
+                            b->connected ? "hit" : "missed",
+                            info->input != TI_AERIAL ? ""
+                            : b->forced              ? " (swung without a read)"
+                                                     : " (timed by the CPU)");
+            }
             b->executing = false;
             b->slot++;
             b->cooldown = 1;
@@ -533,8 +659,7 @@ void tactics_Think(Fighter_GObj* gobj)
                 }
                 return;
             }
-            if (dy > info->air.y1 && f->self_vel.y > 0.0f && b->age < 45) {
-                f->cpu.lstick.x = dir * 60;
+            if (holdSwing(f, enemy, b, move, info)) {
                 return;
             }
             b->phase = 1;
@@ -567,6 +692,14 @@ void tactics_Think(Fighter_GObj* gobj)
     }
     if (air && info->air.x0 > info->air.x1) {
         f->cpu.lstick.x = dir * 50;
+        return;
+    }
+    /* Already airborne, an aerial waits for its timing instead of its
+     * range. */
+    if (air && info->input == TI_AERIAL) {
+        if (!holdSwing(f, enemy, b, move, info)) {
+            beginMove(f, b, dir, move, info, air);
+        }
         return;
     }
     /* A reaction was for the air. Landed before it could come out, it is

@@ -31,6 +31,10 @@
 /* Short, because the fighters are running in while it counts. */
 #define PLAN_SETTLE 2
 #define PLAN_AUTO_FRAMES 45
+/* Both fighters free and idle this long opens a break. */
+#define IDLE_BREAK 30
+/* A scripted run with no break for this long has stalled. */
+#define SCRIPT_STALL_FRAMES (20 * 60)
 #define MENU_ROWS 4
 #define OPT_CAP 8
 
@@ -43,7 +47,7 @@ static int cursor, frames;
 static bool auto_started;
 static bool live, planning, auto_resume;
 static bool p2_cpu = true;
-static int settle, plan_port, plan_frames;
+static int settle, plan_port, plan_frames, idle, since_plan;
 /* The launched port during a mid-air break, or -1 at a normal break. */
 static int react_port = -1;
 static char result[96] = "Pick a 2-move exchange when the fight pauses. P2 can play itself.";
@@ -500,8 +504,7 @@ static void commitPlan(void)
 
         if (!choosing[p] || opt_n[p] <= 0) {
             continue;
-        }
-        if (pick < 0 || pick >= opt_n[p]) {
+        }        if (pick < 0 || pick >= opt_n[p]) {
             pick = 0;
         }
         queueOption(p, &opts[p][pick]);
@@ -551,6 +554,8 @@ static void openPlan(int launched, const bool* picks)
     }
     plan_frames = 0;
     settle = 0;
+    idle = 0;
+    since_plan = 0;
     {
         Fighter* a = portFighter(0);
         Fighter* b = portFighter(1);
@@ -597,8 +602,28 @@ void tactics_MatchFrame(void)
         bool picks[2] = { false, false };
         int launched = tactics_AirBreak(picks);
 
+        /* A scripted run that stops making decisions is a bug: say where it
+         * stuck and quit rather than leave a window sitting there. */
+        if (auto_resume && ++since_plan >= SCRIPT_STALL_FRAMES) {
+            Fighter* a = portFighter(0);
+            Fighter* b = portFighter(1);
+
+            pc_log_line("tactics: scripted run stalled: P1 state=%d x=%.1f y=%.1f  "
+                        "P2 state=%d x=%.1f y=%.1f",
+                        a ? a->motion_id : -1, a ? a->cur_pos.x : 0.0f, a ? a->cur_pos.y : 0.0f,
+                        b ? b->motion_id : -1, b ? b->cur_pos.x : 0.0f, b ? b->cur_pos.y : 0.0f);
+            exit(2);
+        }
         if (launched >= 0) {
             openPlan(launched, picks);
+            return;
+        }
+        /* Nobody should ever stand around: both free with nothing queued
+         * for a moment is a break, whatever the spacing. */
+        idle = tactics_BothIdle() ? idle + 1 : 0;
+        if (idle >= IDLE_BREAK) {
+            picks[0] = picks[1] = true;
+            openPlan(-1, picks);
             return;
         }
         if (tactics_BreakInAction()) {
@@ -667,6 +692,8 @@ static void enterBattle(GameModeState* state)
         }
     }
     live = true;
+    idle = 0;
+    since_plan = 0;
     planning = false;
     settle = 0;
     auto_resume = scripted;

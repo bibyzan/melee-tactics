@@ -119,10 +119,24 @@ int tactics_AirBreak(bool* picks);
 /// Both queues are spent, neither fighter is attacking, grabbed, in hitstun,
 /// or still recovering to the stage, and the two are about to meet.
 bool tactics_BreakInAction(void);
+/// Both fighters can act, neither has anything queued, and neither is moving.
+bool tactics_BothIdle(void);
 /// True when this fighter is driven by a tactics bot instead of the CPU AI.
 bool tactics_Controls(Fighter* fp);
 /// Fill fp->cpu's pad state for this frame; runs in place of ftCo_800B3900.
 void tactics_Think(Fighter_GObj* gobj);
+
+/* tacticsai.c */
+/// With MELEE_TACTICS_AI_DUMP set, log this fighter's CPU attack tables and
+/// their input scripts once per fighter kind.
+void tactics_DumpAi(Fighter* fp);
+/// True when this fighter's CPU attack table has an entry for the move in its
+/// current state (ground or air).
+bool tactics_AiKnows(Fighter* fp, int move);
+/// Asks Melee's own CPU attack selector whether this move, started now, will
+/// hit the target: the character's real frames to the hitbox and hitbox box,
+/// with both fighters' motion predicted to that frame.
+bool tactics_AiConnects(Fighter* fp, Fighter* target, int move);
 
 /* tacticsmode.c */
 /// True while the match is held for the next exchange.

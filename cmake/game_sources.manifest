@@ -896,6 +896,7 @@ src/melee/pl/plstale.c
 src/melee/pl/pltrick.c
 src/melee/sfx/crowdsfx.c
 src/melee/sfx/sfx_unk.c
+src/melee/tactics/tacticsai.c
 src/melee/tactics/tacticsbot.c
 src/melee/tactics/tacticsmode.c
 src/melee/tactics/tacticsmoves.c

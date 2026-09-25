@@ -42,7 +42,9 @@ The draft is the two fighters and whether P2 plays itself. P2 is a CPU by defaul
 
 A launch opens a second kind of break. When a fighter is knocked into tumble, the other one chases on its own: it runs underneath, then jumps and double-jumps up to meet them. Just before the chaser reaches them, the match freezes. The chaser picks a move or a combo (up air, up air into up air, neutral air into forward air, up smash to cover the landing) or waits for the read. The launched fighter picks a reaction only once it can act, so the reaction comes out right away: air dodge away, jump away, drift away, or an aerial. While it is still in hitstun, only the chaser picks. The instant hitstun ends in the air, the match freezes again for the reaction. If the follow-up launches again, the chase starts over, so juggles become a series of reads. Launches offstage and trades keep playing.
 
-A break only waits for the players who have a choice. If only the CPU does, it picks and play goes on without a pause. Getting hit throws out the rest of your queue, and a tumbling fighter techs when it lands. Offstage recovery, the ledge jump, and getup still happen on their own. The result returns to the draft.
+An aerial in the air waits for its moment. The timing comes from Melee's own CPU attack selector: each character's real frames to the hitbox and hitbox box, from `PlCo.dat`, with both fighters' motion predicted to that frame. `MELEE_TACTICS_AI_DUMP=1` logs those tables.
+
+A break only waits for the players who have a choice. If both fighters stand idle with nothing queued for half a second, that is a break too, so nobody stands around. If only the CPU does, it picks and play goes on without a pause. Getting hit throws out the rest of your queue, and a tumbling fighter techs when it lands. Offstage recovery, the ledge jump, and getup still happen on their own. The result returns to the draft.
 
 This version can draft normals and aerials. Ice Climbers are left out until the partner can share the controller policy. Specials and throws are catalogued for later. The bot uses generic spacing.
 
