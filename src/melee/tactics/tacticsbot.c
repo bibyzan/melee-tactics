@@ -1,6 +1,7 @@
 #include "tactics.h"
 
 #include <math.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include <melee/ft/inlines.h>
@@ -171,7 +172,6 @@ static bool exchangeBusy(Fighter* f)
         inRange(s, ftCo_MS_Catch, ftCo_MS_ThrowLw) ||
         inRange(s, ftCo_MS_CapturePulledHi, ftCo_MS_CaptureFoot) ||
         inRange(s, ftCo_MS_ThrownF, ftCo_MS_ThrownlwWomen) ||
-        inRange(s, ftCo_MS_EscapeF, ftCo_MS_EscapeAir) ||
         inRange(s, ftCo_MS_ReboundStop, ftCo_MS_Rebound) ||
         inRange(s, ftCo_MS_FlyReflectWall, ftCo_MS_StopCeil) ||
         s == ftCo_MS_CliffCatch ||
@@ -232,6 +232,17 @@ bool tactics_BreakInAction(void)
 
     if (!fighterPair(fs)) {
         return false;
+    }
+    if (getenv("MELEE_TACTICS_DEBUG") != NULL) {
+        float gx = fs[0]->cur_pos.x - fs[1]->cur_pos.x;
+        float gy = fs[0]->cur_pos.y - fs[1]->cur_pos.y;
+
+        if (gx * gx + gy * gy <= MEET_TRIGGER * MEET_TRIGGER) {
+            pc_log_line("tactics: meet gap=%.0f,%.0f P1 state=%d busy=%d done=%d  "
+                        "P2 state=%d busy=%d done=%d",
+                        gx, gy, fs[0]->motion_id, exchangeBusy(fs[0]), queueDone(0),
+                        fs[1]->motion_id, exchangeBusy(fs[1]), queueDone(1));
+        }
     }
     if (exchangeBusy(fs[0]) || !queueDone(0) || exchangeBusy(fs[1]) || !queueDone(1)) {
         return false;

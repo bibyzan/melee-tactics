@@ -137,21 +137,21 @@ static int moveCmd(int move, bool air)
     }
 }
 
-static TacticsAiEntry* aiTable(Fighter* fp, bool air)
+static TacticsAiEntry* aiTable(int kind, bool air)
 {
     DiscU32* tables;
 
-    if (Fighter_804D64FC == NULL || fp->kind < 0 || fp->kind >= Ft_Kind_Max) {
+    if (Fighter_804D64FC == NULL || kind < 0 || kind >= Ft_Kind_Max) {
         return NULL;
     }
     tables = DP(DiscU32, air ? Fighter_804D64FC->x8 : Fighter_804D64FC->x4);
-    return tables != NULL ? DP(TacticsAiEntry, tables[fp->kind].v) : NULL;
+    return tables != NULL ? DP(TacticsAiEntry, tables[kind].v) : NULL;
 }
 
-/* The entry this fighter's AI has for a move, or NULL. */
-static TacticsAiEntry* findEntry(Fighter* fp, int move, bool air)
+/* The entry a fighter kind's AI has for a move, or NULL. */
+static TacticsAiEntry* findEntry(int kind, int move, bool air)
 {
-    TacticsAiEntry* e = aiTable(fp, air);
+    TacticsAiEntry* e = aiTable(kind, air);
     int cmd = moveCmd(move, air);
 
     for (; e != NULL && e->cmd != 0; e++) {
@@ -166,13 +166,13 @@ static TacticsAiEntry* findEntry(Fighter* fp, int move, bool air)
 
 bool tactics_AiKnows(Fighter* fp, int move)
 {
-    return findEntry(fp, move, fp->ground_or_air == GA_Air) != NULL;
+    return findEntry(fp->kind, move, fp->ground_or_air == GA_Air) != NULL;
 }
 
 bool tactics_AiConnects(Fighter* fp, Fighter* target, int move)
 {
     bool air = fp->ground_or_air == GA_Air;
-    TacticsAiEntry* e = findEntry(fp, move, air);
+    TacticsAiEntry* e = findEntry(fp->kind, move, air);
     struct CpuFighter* cpu = &fp->cpu;
     struct CpuFighter saved;
     int got;
@@ -183,24 +183,80 @@ bool tactics_AiConnects(Fighter* fp, Fighter* target, int move)
     /* The real selector, with this one attack as the whole allow list. An
      * allow list also skips the selector's period gate, so the answer is
      * purely whether the hitbox will cover the target. The selector writes
-     * a few CPU fields; ours is not running the CPU think, but put them back
-     * anyway. */
+     * a few CPU fields that the CPU think reads later; put them back. */
     saved = *cpu;
     cpu->xEC = 0;
     cpu->xC8 = 1;
     cpu->xA8_array[0] = e->cmd;
-    got = ftCo_800B4AB0(fp, target, aiTable(fp, air));
+    got = ftCo_800B4AB0(fp, target, aiTable(fp->kind, air));
     *cpu = saved;
     return got == e->cmd;
+}
+
+/* One line per fighter kind: the ids in each table, and which catalogue
+ * moves have no entry (those fall back to the generic zones). */
+static void coverage(int kind)
+{
+    static const char* short_names[TM_COUNT] = {
+        [TM_JAB] = "jab",      [TM_FTILT] = "ftilt",    [TM_UTILT] = "utilt",
+        [TM_DTILT] = "dtilt",  [TM_DASH_ATTACK] = "dash", [TM_FSMASH] = "fsmash",
+        [TM_USMASH] = "usmash", [TM_DSMASH] = "dsmash", [TM_NAIR] = "nair",
+        [TM_FAIR] = "fair",    [TM_BAIR] = "bair",      [TM_UAIR] = "uair",
+        [TM_DAIR] = "dair",    [TM_NEUTRAL_B] = "nB",   [TM_SIDE_B] = "sB",
+        [TM_UP_B] = "uB",      [TM_DOWN_B] = "dB",
+    };
+    char ids[2][128];
+    char missing[160];
+    size_t len;
+    int a, m;
+
+    for (a = 0; a < 2; a++) {
+        TacticsAiEntry* e = aiTable(kind, a != 0);
+
+        len = 0;
+        ids[a][0] = '\0';
+        for (; e != NULL && e->cmd != 0 && len + 6 < sizeof(ids[a]); e++) {
+            len += snprintf(ids[a] + len, sizeof(ids[a]) - len, "%02X ", e->cmd);
+        }
+    }
+    len = 0;
+    missing[0] = '\0';
+    for (m = TM_JAB; m <= TM_DOWN_B; m++) {
+        bool air = m >= TM_NAIR && m <= TM_DAIR;
+
+        if (findEntry(kind, m, air) == NULL &&
+            (m < TM_NEUTRAL_B || findEntry(kind, m, !air) == NULL))
+        {
+            len += snprintf(missing + len, sizeof(missing) - len, "%s ", short_names[m]);
+        }
+    }
+    pc_log_line("tactics-ai: kind %2d  ground[%s] air[%s] missing[%s]", kind, ids[0], ids[1],
+                missing);
 }
 
 void tactics_DumpAi(Fighter* fp)
 {
     static bool done[Ft_Kind_Max];
+    static bool all_done;
+    const char* mode = getenv("MELEE_TACTICS_AI_DUMP");
+    int k;
 
-    if (getenv("MELEE_TACTICS_AI_DUMP") == NULL || fp->kind < 0 || fp->kind >= Ft_Kind_Max ||
-        done[fp->kind] || Fighter_804D64FC == NULL)
-    {
+    if (mode == NULL || fp->kind < 0 || fp->kind >= Ft_Kind_Max || Fighter_804D64FC == NULL) {
+        return;
+    }
+    /* "all": the coverage line for every playable kind, once, then the full
+     * tables for the fighters in this match. */
+    if (strcmp(mode, "all") == 0) {
+        if (!all_done) {
+            all_done = true;
+            for (k = 0; k <= Ft_Kind_Emblem; k++) {
+                if (k != Ft_Kind_Nana) {
+                    coverage(k);
+                }
+            }
+        }
+    }
+    if (done[fp->kind]) {
         return;
     }
     done[fp->kind] = true;

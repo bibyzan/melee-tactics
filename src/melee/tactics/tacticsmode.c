@@ -667,6 +667,17 @@ static void enterBattle(GameModeState* state)
     bool scripted = getenv("MELEE_TACTICS_AUTOSTART") != NULL;
     int i;
 
+    /* A scripted run can pick its fighters by character kind number. */
+    for (i = 0; i < 2; i++) {
+        const char* pick = getenv(i == 0 ? "MELEE_TACTICS_P1" : "MELEE_TACTICS_P2");
+        int ckind = pick != NULL ? atoi(pick) : -1;
+
+        if (pick != NULL && ckind >= 0 && ckind < CKind_Playable_Count &&
+            ckind != CKind_PopoNana)
+        {
+            draft[i].ckind = ckind;
+        }
+    }
     gm_SetupRulesDefaults(&s->rules);
     s->rules.stkind = St_Kind_Last;
     s->rules.match_kind = MatchKind_Stock;
