@@ -499,6 +499,10 @@ static void commitPlan(void)
     if (p2_cpu && choosing[1] && opt_n[1] > 0) {
         opt_cursor[1] = cpuPick(opt_n[1]);
     }
+    /* A scripted run exercises the whole list, not just the top row. */
+    if (auto_resume && choosing[0] && opt_n[0] > 0) {
+        opt_cursor[0] = cpuPick(opt_n[0]);
+    }
     for (p = 0; p < 2; p++) {
         int pick = opt_cursor[p];
 

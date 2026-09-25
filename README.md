@@ -42,11 +42,11 @@ The draft is the two fighters and whether P2 plays itself. P2 is a CPU by defaul
 
 A launch opens a second kind of break. When a fighter is knocked into tumble, Melee's CPU chases with the other one. Just before the chaser reaches them, the match freezes. The chaser picks a move or a combo (up air, up air into up air, neutral air into forward air, up smash to cover the landing) or waits for the read. The launched fighter picks a reaction only once it can act, so the reaction comes out right away: air dodge away, jump away, drift away, or an aerial. While it is still in hitstun, only the chaser picks. The instant hitstun ends in the air, the match freezes again for the reaction. If the follow-up launches again, the chase starts over, so juggles become a series of reads. Launches offstage and trades keep playing.
 
-An aerial in the air waits for its moment. The timing comes from Melee's own CPU attack selector: each character's real frames to the hitbox and hitbox box, from `PlCo.dat`, with both fighters' motion predicted to that frame. `MELEE_TACTICS_AI_DUMP=1` logs those tables.
+Every pick waits for its moment. Melee's own CPU attack selector decides when: each character's real frames to the hitbox and hitbox box, from `PlCo.dat`, with both fighters' motion predicted to that frame. That covers normals, aerials, the grab, and the specials a character's CPU tables list (0x11 neutral B, 0x1B/0x1C/0x1D side B, 0x1F up B, 0x26 down B). A move with no entry uses a generic reach. `MELEE_TACTICS_AI_DUMP=1` logs the tables for the fighters in a match, and `=all` logs every character's.
 
 A break only waits for the players who have a choice. If only the CPU has one, it picks and play goes on without a pause. If both fighters stand idle with nothing queued for half a second, that is a break too, so nobody stands around. Getting hit, a knockdown, the ledge, or being knocked offstage throws out the rest of your queue, and Melee's CPU takes over: it techs, gets up, and recovers. The result returns to the draft.
 
-This version can draft normals and aerials. Ice Climbers are left out until the partner can share the controller policy. Specials and throws are catalogued for later. The bot uses generic spacing.
+The menus offer normals, aerials, grabs with a throw, and each character's specials (Zelda and Sheik cannot transform). Ice Climbers are left out until the partner can share the controller policy.
 
 ## Build on Windows
 

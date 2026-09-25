@@ -19,8 +19,8 @@
 #define FD_FLOOR -8.0f
 
 typedef struct Brain {
-    int slot, phase, age, cooldown, frames, approach;
-    bool executing, saw_attack, connected, forced;
+    int slot, phase, age, cooldown, frames, approach, aim;
+    bool executing, saw_attack, connected;
 } Brain;
 
 /* With nothing queued, Melee's own CPU moves the fighter. The break comes as
@@ -32,8 +32,8 @@ typedef struct Brain {
 #define CHASE_LEAD 16
 #define CHASE_REACH 24.0f
 #define CHASE_HOP 22.0f
-/* Frames an airborne aerial waits for the swing to line up. */
-#define AIR_WAIT 30
+/* Frames an aerial keeps aiming, across hops, before its pick is dropped. */
+#define AIM_LIMIT 75
 /* Frames a queued move spends closing to its reach before it goes anyway. */
 #define APPROACH_LIMIT 30
 
@@ -88,6 +88,7 @@ void tactics_RestartQueue(int p)
     b->age = 0;
     b->cooldown = 0;
     b->approach = 0;
+    b->aim = 0;
     b->executing = false;
     b->saw_attack = false;
 }
@@ -468,24 +469,40 @@ static bool swingConnects(Fighter* f, Fighter* enemy, int move, const TacticsMov
     return swingLands(f, enemy, info);
 }
 
-/* Hold an airborne aerial until it lines up, drifting to where the foe is
- * headed. True while holding. Gives up after AIR_WAIT frames, or just before
- * landing, where the swing would be lost. */
-static bool holdSwing(Fighter* f, Fighter* enemy, Brain* b, int move, const TacticsMoveInfo* info)
+enum { AIM_SWING, AIM_HOLD, AIM_GIVE_UP };
+
+/* Keep an airborne aerial aimed until the swing will land: drift to where the
+ * foe is headed, and spend the midair jump on a foe still above. A blind
+ * swing almost never lands, so none is thrown; a fighter that lands without
+ * an opening jumps again (see the phase 0 path). After AIM_LIMIT frames with
+ * no opening, give the pick up. */
+static int aimSwing(Fighter* f, Fighter* enemy, Brain* b, int move, const TacticsMoveInfo* info)
 {
     float ex, ey;
 
     if (swingConnects(f, enemy, move, info)) {
-        b->forced = false;
-        return false;
+        return AIM_SWING;
     }
-    if (++b->approach >= AIR_WAIT || (f->cur_pos.y < 6.0f && f->pos_delta.y < 0.0f)) {
-        b->forced = true;
-        return false;
+    if (++b->aim >= AIM_LIMIT) {
+        return AIM_GIVE_UP;
     }
     project(enemy, info->startup, &ex, &ey);
     f->cpu.lstick.x = fabsf(ex - f->cur_pos.x) > 3.0f ? (ex > f->cur_pos.x ? 127 : -127) : 0;
-    return true;
+    /* Pressing every other frame gives the button a fresh press. */
+    if (f->pos_delta.y <= 0.0f && ey - f->cur_pos.y > info->air.y1 &&
+        f->x1968_jumpsUsed < f->co_attrs.max_jumps && (b->frames & 1))
+    {
+        f->cpu.buttons = HSD_PAD_X;
+    }
+    return AIM_HOLD;
+}
+
+static void giveUp(Fighter* f, Brain* b, const TacticsMoveInfo* info)
+{
+    pc_log_line("tactics: P%d %s gave up (no opening)", f->player_id + 1, info->name);
+    b->executing = false;
+    b->slot++;
+    b->aim = 0;
 }
 
 static bool running(Fighter* f)
@@ -535,6 +552,16 @@ void tactics_Think(Fighter_GObj* gobj)
         f->motion_id == ftCo_MS_DownWaitU || f->motion_id == ftCo_MS_DownWaitD ||
         (air && (fabsf(f->cur_pos.x) > FD_EDGE || f->cur_pos.y < FD_FLOOR)))
     {
+        if (b->slot < l->count) {
+            const TacticsMoveInfo* cut = tactics_GetMove(l->ckind, l->moves[b->slot]);
+
+            pc_log_line("tactics: P%d %s cut short (%s)", f->player_id + 1,
+                        cut != NULL ? cut->name : "?",
+                        f->x221C_b6                        ? "hit"
+                        : f->motion_id == ftCo_MS_CliffWait ? "ledge"
+                        : air                               ? "offstage"
+                                                            : "knockdown");
+        }
         b->executing = false;
         b->slot = l->count;
         return;
@@ -577,17 +604,17 @@ void tactics_Think(Fighter_GObj* gobj)
                              f->motion_id >= ftCo_MS_Count;
             break;
         }
-        b->connected |= b->saw_attack && enemy->dmg.x195c_hitlag_frames > 0.0f;
+        /* A grab lands without hitlag: holding the foe is the hit. */
+        b->connected |= b->saw_attack &&
+                        (enemy->dmg.x195c_hitlag_frames > 0.0f || f->victim_gobj != NULL);
         if ((b->saw_attack && actionable(f)) || b->age > 150) {
             if (info->input <= TI_THROW) {
-                pc_log_line("tactics: P%d %s %s%s", f->player_id + 1, info->name,
-                            b->connected ? "hit" : "missed",
-                            info->input != TI_AERIAL ? ""
-                            : b->forced              ? " (swung without a read)"
-                                                     : " (timed by the CPU)");
+                pc_log_line("tactics: P%d %s %s", f->player_id + 1, info->name,
+                            b->connected ? "hit" : "missed");
             }
             b->executing = false;
             b->slot++;
+            b->aim = 0;
             b->cooldown = 1;
             return;
         }
@@ -605,15 +632,24 @@ void tactics_Think(Fighter_GObj* gobj)
         if (info->input == TI_AERIAL && b->phase == 0) {
             float dy = enemy->cur_pos.y - f->cur_pos.y;
 
-            /* A target far overhead gets a full hop, and the swing waits
-             * until the rise brings it into reach. */
+            /* A target far overhead gets a full hop. Landed without an
+             * opening, jump again. */
             if (!air) {
-                if (dy > info->ground.y1) {
+                if (dy > info->ground.y1 && f->motion_id == ftCo_MS_KneeBend) {
                     pad(f, 0, 0, HSD_PAD_X, 0, 0);
+                } else if (actionable(f) && (b->frames & 1)) {
+                    pad(f, 0, 0, HSD_PAD_X, 0, 0);
+                }
+                if (++b->aim >= AIM_LIMIT) {
+                    giveUp(f, b, info);
                 }
                 return;
             }
-            if (holdSwing(f, enemy, b, move, info)) {
+            switch (aimSwing(f, enemy, b, move, info)) {
+            case AIM_HOLD:
+                return;
+            case AIM_GIVE_UP:
+                giveUp(f, b, info);
                 return;
             }
             b->phase = 1;
@@ -651,8 +687,13 @@ void tactics_Think(Fighter_GObj* gobj)
     /* Already airborne, an aerial waits for its timing instead of its
      * range. */
     if (air && info->input == TI_AERIAL) {
-        if (!holdSwing(f, enemy, b, move, info)) {
+        switch (aimSwing(f, enemy, b, move, info)) {
+        case AIM_SWING:
             beginMove(f, b, dir, move, info, air);
+            break;
+        case AIM_GIVE_UP:
+            giveUp(f, b, info);
+            break;
         }
         return;
     }
@@ -664,11 +705,15 @@ void tactics_Think(Fighter_GObj* gobj)
     }
     {
         float reach = air ? info->air.x1 : info->ground.x1;
+        bool wait;
         int face;
 
-        /* Bodies can keep two fighters farther apart than a short reach.
-         * After a second of closing in, swing anyway. */
-        if (fabsf(dx) > reach && ++b->approach < APPROACH_LIMIT) {
+        /* Melee's CPU selector says when the character's own hitbox will
+         * land; moves it has no entry for use the generic reach. Either way,
+         * after half a second of closing in, swing anyway. */
+        wait = tactics_AiKnows(f, move) ? !tactics_AiConnects(f, enemy, move)
+                                        : fabsf(dx) > reach;
+        if (wait && ++b->approach < APPROACH_LIMIT) {
             /* Keep a run going rather than dropping to a walk. */
             pad(f, dir * (running(f) ? 127 : 65), 0, 0, 0, 0);
             return;

@@ -98,7 +98,8 @@ static void dumpTable(const char* label, DiscU32* tables, int kind)
 
 /* Command ids are global script indices, so one id means the same input for
  * every character; the ground and air tables tell apart, say, up tilt and up
- * air (both 0x06). Side B is 0x1B or 0x1C depending on the character. */
+ * air (both 0x06). Side B is 0x1B, or 0x1C (a multi-hit string) or 0x1D (a
+ * charge) depending on the character; down B is 0x26. */
 static int moveCmd(int move, bool air)
 {
     switch (move) {
@@ -132,6 +133,13 @@ static int moveCmd(int move, bool air)
         return 0x11;
     case TM_UP_B:
         return 0x1F;
+    case TM_DOWN_B:
+        return 0x26;
+    case TM_FTHROW:
+    case TM_BTHROW:
+    case TM_UTHROW:
+    case TM_DTHROW:
+        return air ? 0 : 0x28; /* the grab; the throw comes once holding */
     default:
         return 0;
     }
@@ -156,7 +164,7 @@ static TacticsAiEntry* findEntry(int kind, int move, bool air)
 
     for (; e != NULL && e->cmd != 0; e++) {
         if (e->cmd == cmd ||
-            (move == TM_SIDE_B && (e->cmd == 0x1B || e->cmd == 0x1C)))
+            (move == TM_SIDE_B && (e->cmd == 0x1B || e->cmd == 0x1C || e->cmd == 0x1D)))
         {
             return e;
         }
@@ -253,6 +261,18 @@ void tactics_DumpAi(Fighter* fp)
                 if (k != Ft_Kind_Nana) {
                     coverage(k);
                 }
+            }
+            for (k = 0; k <= Ft_Kind_Emblem; k++) {
+                if (k != Ft_Kind_Nana) {
+                    pc_log_line("tactics-ai: fighter kind %d", k);
+                    dumpTable("ground", DP(DiscU32, Fighter_804D64FC->x4), k);
+                    dumpTable("air", DP(DiscU32, Fighter_804D64FC->x8), k);
+                }
+            }
+            /* A scripted dump run has what it came for. */
+            if (getenv("MELEE_TACTICS_AUTOSTART") != NULL) {
+                pc_log_line("tactics-ai: dump done, exiting");
+                exit(0);
             }
         }
     }
