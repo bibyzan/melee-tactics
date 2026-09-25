@@ -169,6 +169,7 @@ typedef enum VsMenuSelection {
     SEL_VS_RULES = 3,
     SEL_VS_NAME = 4,
     SEL_VS_ONLINE = 5,
+    SEL_VS_TACTICS = 6,
 } VsMenuSelection;
 
 #ifdef TARGET_PC

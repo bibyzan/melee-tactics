@@ -58,6 +58,8 @@ u8 pc_boot_scene(void)
             /* nothing */
         } else if (strcmp(want, "title") == 0) {
             scene = GM_TITLE;
+        } else if (strcmp(want, "tactics") == 0) {
+            scene = GM_TACTICS;
         } else if (strcmp(want, "vs") == 0) {
             scene = GM_DEBUG_VS;
         } else if (strcmp(want, "classic") == 0) {

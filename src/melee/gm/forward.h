@@ -63,7 +63,8 @@ typedef enum GameModeKind {
     /* 2B */ GM_EVENT,
     /* 2C */ GM_SINGLE_BUTTON_VS,
     /* 2D */ GM_ONLINE, ///< PC: netplay (docs/netcode-plan.md §10)
-    /* 2E */ GM_COUNT,
+    /* 2E */ GM_TACTICS,
+    /* 2F */ GM_COUNT,
 } GameModeKind;
 
 /// Index into #gmm_x0_vsmodes::table.
@@ -138,7 +139,8 @@ typedef enum GameSceneKind {
     /* +2B */ GS_STAFFROLL, ///< Credits
     /* +2C */ GS_CAMERA_VS,
     /* +2D */ GS_ONLINE_LOBBY, ///< PC: LAN lobby (gmonlinemode.c)
-    /* +2E */ GS_COUNT
+    /* +2E */ GS_TACTICS_DRAFT,
+    /* +2F */ GS_COUNT
 } GameSceneKind;
 
 typedef enum MatchOutcome {

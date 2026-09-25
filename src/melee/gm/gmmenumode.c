@@ -178,6 +178,10 @@ void onEnter(GameModeState* scene)
         data->menu_kind = MENU_KIND_1P;
         data->hovered_selection = SEL_1P_TRAINING;
         return;
+    case GM_TACTICS:
+        data->menu_kind = MENU_KIND_VS;
+        data->hovered_selection = SEL_VS_TACTICS;
+        return;
     case GM_VS:
         data->menu_kind = MENU_KIND_VS;
         data->hovered_selection = SEL_VS_MELEE;

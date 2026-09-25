@@ -1,4 +1,5 @@
 #include "gmscdata.h"
+#include <melee/tactics/tacticsmode.h>
 
 #include "gm_1A33.h"
 #include "gm_unsplit.h"
@@ -379,6 +380,7 @@ static GameScene scenes[] = {
         gm_Scene_OnlineLobby_OnExit,
         NULL,
     },
+    { GS_TACTICS_DRAFT, tactics_DraftFrame, tactics_DraftEnter, tactics_DraftExit, NULL },
     {
         GS_COUNT,
         NULL,
@@ -757,6 +759,7 @@ static GameMode modes[] = {
         NULL,
         gm_Mode_Online_States,
     },
+    { false, GM_TACTICS, NULL, NULL, NULL, gm_Mode_Tactics_States },
     {
         false,
         GM_COUNT,

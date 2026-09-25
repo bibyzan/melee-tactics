@@ -324,6 +324,7 @@ static AnimLoopSettings mn_803EB48C[] = {
     { 850, 899, 870 }, { 900, 949, 920 },
 #ifdef TARGET_PC
     { 700, 749, 720 }, /* SEL_VS_ONLINE: reuse the Melee preview */
+    { 700, 749, 720 }, /* SEL_VS_TACTICS */
 #endif
 };
 
@@ -420,7 +421,7 @@ MenuKindData mn_803EB6B0[MENU_KIND_TABLE_LEN] = {
         40,
         mn_803EB678,
 #ifdef TARGET_PC
-        0x06, /* + SEL_VS_ONLINE */
+        0x07, /* PC: ONLINE and TACTICS */
 #else
         0x05,
 #endif
@@ -2624,6 +2625,12 @@ void mn_8022D594(HSD_GObj* gp)
             gm_801A4B60();
             break;
 #ifdef TARGET_PC
+        case SEL_VS_TACTICS:
+            sfxForward();
+            data = gm_GetCurrentSceneExitData();
+            data->pending_mode = GM_TACTICS;
+            gm_801A4B60();
+            break;
         case SEL_VS_ONLINE:
             sfxForward();
             mn_80229894(MENU_KIND_ONLINE, SEL_ONLINE_LAN, 1);

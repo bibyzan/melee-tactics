@@ -29,6 +29,7 @@ static const char* notice;
 
 const char* mnOnline_Label(MenuKind kind, int selection)
 {
+    if (kind == MENU_KIND_VS && selection == SEL_VS_TACTICS) return "TACTICS";
     if (kind == MENU_KIND_VS && selection == SEL_VS_ONLINE) {
         return "ONLINE";
     }
@@ -42,6 +43,7 @@ const char* mnOnline_Label(MenuKind kind, int selection)
 
 const char* mnOnline_Description(MenuKind kind, int selection)
 {
+    if (kind == MENU_KIND_VS && selection == SEL_VS_TACTICS) return "Queue three moves. The fight pauses between exchanges.";
     if (kind == MENU_KIND_VS && selection == SEL_VS_ONLINE) {
         return "Play against other players over the network.";
     }

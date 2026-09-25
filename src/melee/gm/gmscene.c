@@ -11,6 +11,7 @@
 #include "gm_unsplit.h"
 #include "gmmain_lib.h"
 #include "gmscdata.h"
+#include <melee/tactics/tactics.h>
 #include <dolphin/os/OSThread.h>
 #include <melee/db/db.h>
 #include <melee/if/ifcoget.h>
@@ -317,6 +318,15 @@ static bool gm_RunSimTick(void (*on_frame)(void), struct gm_80479D58_t* temp_r25
     }
     if (!lb_80019A30(1)) {
         temp_r25->unk_10.unk_28 |= ~gm_803DA8C8[temp_r25->unk_10.unk_34];
+    }
+    /* Tactics holds the match between exchanges with the same proc mask a
+     * pause uses, so fighters, items and the stage keep their positions
+     * and velocities while the next three inputs are chosen. */
+    if (gm_GetCurrentGameMode() == GM_TACTICS) {
+        tactics_MatchFrame();
+        if (tactics_IsPlanning()) {
+            temp_r25->unk_10.unk_28 |= 0x82FFFAULL;
+        }
     }
     if (DbLevel >= DbLKind_DebugRom) {
         db_CheckScreenshot();
