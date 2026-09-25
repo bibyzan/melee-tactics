@@ -82,13 +82,57 @@ static void setStatus(const char* s)
 
 bool tactics_NetOn(void)
 {
-    if (!N.on) {
-        N.on = pc_link_state() != PC_LINK_NONE;
-        if (N.on) {
-            N.host = pc_link_is_host();
-        }
-    }
     return N.on;
+}
+
+bool tactics_NetAvailable(void)
+{
+    return pc_link_available();
+}
+
+/* A session starts from nothing: the last one's lobby, picks and status are
+ * gone. */
+static void fresh(bool host)
+{
+    memset(&N, 0, sizeof N);
+    N.on = true;
+    N.host = host;
+}
+
+bool tactics_NetHost(const char* name)
+{
+    fresh(true);
+    setStatus("Waiting for an opponent to join...");
+    if (!pc_link_host(name)) {
+        setStatus("Could not open a lobby");
+        return false;
+    }
+    return true;
+}
+
+bool tactics_NetJoin(const char* room)
+{
+    fresh(false);
+    setStatus("Joining...");
+    if (!pc_link_join(room)) {
+        setStatus("Could not join that lobby");
+        return false;
+    }
+    return true;
+}
+
+void tactics_NetLeave(void)
+{
+    if (N.on) {
+        pc_link_close();
+    }
+    memset(&N, 0, sizeof N);
+}
+
+/* The other player is connected (the link is open). */
+bool tactics_NetConnected(void)
+{
+    return N.on && pc_link_state() == PC_LINK_OPEN;
 }
 
 int tactics_NetLocalPort(void)
@@ -179,7 +223,9 @@ void tactics_NetPoll(void)
     if (s == PC_LINK_CLOSED) {
         setStatus("The other player left");
     } else if (s == PC_LINK_CONNECTING) {
-        setStatus(N.host ? "Waiting for the other player to join" : "Joining...");
+        setStatus(N.host ? "Waiting for an opponent to join..." : "Joining...");
+    } else if (s == PC_LINK_OPEN && !N.hello_sent) {
+        setStatus("Opponent here! Pick your fighter and press READY");
     }
     /* Both commits in: the reveal can go. */
     if (N.brk.sent_commit && N.brk.got_commit && !N.brk.sent_reveal) {
@@ -285,4 +331,9 @@ bool tactics_NetTheirPick(int* pick)
 bool tactics_NetWaiting(void)
 {
     return N.brk.sent_commit && !N.brk.got_reveal;
+}
+
+bool tactics_NetTheyCommitted(void)
+{
+    return N.brk.got_commit;
 }

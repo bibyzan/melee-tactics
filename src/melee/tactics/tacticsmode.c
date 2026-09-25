@@ -21,6 +21,7 @@
 #include <melee/gm/gmonlinemode.h>
 #include <melee/gr/forward.h>
 #include <melee/lb/lblanguage.h>
+#include <pc/link.h>
 #include <pc/pc.h>
 #include <sysdolphin/baselib/gobj.h>
 #include <sysdolphin/baselib/gobjgxlink.h>
@@ -52,14 +53,14 @@ static bool live, planning, auto_resume;
 static int auto_frames = PLAN_AUTO_FRAMES;
 /* A match against another machine (tacticsnet.c). net is set for the fight
  * once the lobby agreed on the seed and both fighters. */
-static bool online, online_ready, online_agreed;
+static bool online, online_ready, online_agreed, after_online;
 static u32 online_seed, brk_sum;
 static int online_ckind[2];
 static bool p2_cpu = true;
 static int settle, plan_port, plan_frames, idle, since_plan;
 /* The launched port during a mid-air break, or -1 at a normal break. */
 static int react_port = -1;
-static char result[96] = "Pick a 2-move exchange when the fight pauses. P2 can play itself.";
+static char result[96];
 
 enum {
     LINE_TITLE,
@@ -446,7 +447,9 @@ static void showPlan(void)
     } else {
         snprintf(buf, sizeof(buf), "vs P%d %s  %d%%%s", foe + 1,
                  tactics_FighterName(draft[foe].ckind), portPercent(foe),
-                 !p2_cpu && choosing[foe] && opt_locked[foe] ? "  (locked in)" : "");
+                 !choosing[foe] ? ""
+                 : online       ? (tactics_NetTheyCommitted() ? "  (locked in)" : "")
+                 : !p2_cpu && opt_locked[foe] ? "  (locked in)" : "");
     }
     setPlanLine(&plan_lines[LINE_SUB], buf);
     setPlanColor(&plan_lines[LINE_SUB], &col_white);
@@ -872,6 +875,11 @@ static void exitBattle(GameModeState* state)
     }
     pc_log_line("tactics: result %s frames=%u", result, end->frame_count);
     tactics_SyncEnd();
+    /* An online match is one session: back in the menus it has ended. */
+    if (online) {
+        tactics_NetLeave();
+        after_online = true;
+    }
     online = online_agreed = online_ready = false;
     closeFight();
     tactics_ClearLoadouts();
@@ -884,20 +892,83 @@ GameModeState gm_Mode_Tactics_States[] = {
     { GM_GAMEMODESTATE_TERMINATE }
 };
 
+/* ---- the menus ---------------------------------------------------------
+ * Everything before a fight happens here, in game: the main menu, the draft
+ * against the CPU, and online play (host a lobby, or pick one from the list
+ * of open lobbies, then both players ready up). All of it is drawn with the
+ * native lobby view.
+ *
+ * A scripted run (MELEE_TACTICS_AUTOSTART) drives the same menus: with
+ * MELEE_TACTICS_ONLINE=host it opens a lobby, with =join it joins the first
+ * one listed, otherwise it fights the CPU. MELEE_TACTICS_P1 is its fighter and
+ * MELEE_TACTICS_READY_FRAME when it readies in a lobby. */
+
+typedef enum MenuScreen {
+    SCR_MAIN,
+    SCR_CPU,
+    SCR_ONLINE,
+    SCR_FIND,
+    SCR_LOBBY,
+} MenuScreen;
+
+enum {
+    MAIN_ROWS = 2,
+    ONLINE_ROWS = 3,
+    LOBBY_LIST_MAX = 7,
+    LOBBY_REFRESH_FRAMES = 90,
+};
+
+static MenuScreen screen;
+static int screen_frames;
+static int my_ckind = CKind_Ganon;
+static PcLinkLobby found[LOBBY_LIST_MAX];
+static int found_n = -1;
+static char menu_note[96];
+
+static void goScreen(MenuScreen next)
+{
+    screen = next;
+    screen_frames = 0;
+    cursor = 0;
+}
+
+static const char* scripted(void)
+{
+    return getenv("MELEE_TACTICS_AUTOSTART");
+}
+
+static const char* scriptedOnline(void)
+{
+    return scripted() ? getenv("MELEE_TACTICS_ONLINE") : NULL;
+}
+
 void tactics_DraftEnter(void* unused)
 {
+    const char* mine = getenv("MELEE_TACTICS_P1");
+
     (void) unused;
-    /* A scripted run is one match. Back at the draft, it is over; the exit
-     * handlers shut the port down. */
-    if (auto_started && getenv("MELEE_TACTICS_AUTOSTART") != NULL) {
+    /* A scripted run is one match. Back here, it is over; the exit handlers
+     * shut the port down. */
+    if (auto_started && scripted() != NULL) {
         pc_log_line("tactics: scripted match done, exiting");
         exit(0);
+    }
+    if (mine != NULL && atoi(mine) >= 0 && atoi(mine) < CKind_Playable_Count &&
+        atoi(mine) != CKind_PopoNana)
+    {
+        my_ckind = atoi(mine);
     }
     frames = 0;
     live = false;
     planning = false;
+    /* After an online match, the online menu, so another is one step away. */
+    goScreen(after_online ? SCR_ONLINE : SCR_MAIN);
+    if (after_online) {
+        snprintf(menu_note, sizeof menu_note, "%s", result);
+    }
+    after_online = false;
     mnOnlineLobby_Create();
-    pc_log_line("tactics: draft opened");
+    pc_log_line("tactics: menus opened");
 }
 
 void tactics_DraftExit(void* unused)
@@ -914,91 +985,68 @@ static void cycleFighter(int which, int delta)
     } while (draft[which].ckind == CKind_PopoNana);
 }
 
-/* The draft against another machine: each side picks only its own fighter,
- * and the host's seed starts the match once both are ready. */
-static void netDraftFrame(void)
+static void cycleMine(int delta)
 {
-    u64 keys = gm_GetButtonsTriggered(4);
-    OnlineLobbyView view = { 0 };
-    const char* mine = getenv("MELEE_TACTICS_P1");
-    int local = tactics_NetLocalPort();
-    int delta;
+    do {
+        my_ckind = (my_ckind + CKind_Playable_Count + delta) % CKind_Playable_Count;
+    } while (my_ckind == CKind_PopoNana);
+}
 
-    frames++;
-    /* For scripted runs, MELEE_TACTICS_P1 is this side's own fighter. */
-    if (frames == 1 && mine != NULL && atoi(mine) >= 0 && atoi(mine) < CKind_Playable_Count &&
-        atoi(mine) != CKind_PopoNana)
-    {
-        draft[0].ckind = atoi(mine);
+static void moveCursor(u64 keys, int rows)
+{
+    if (rows <= 0) {
+        cursor = 0;
+        return;
     }
-    if (!online_ready) {
-        if (keys & PAD_ANY_UP || keys & PAD_ANY_DOWN) {
-            cursor = cursor == 0 ? 1 : 0;
-        }
-        delta = (keys & PAD_ANY_RIGHT) ? 1 : (keys & PAD_ANY_LEFT) ? -1 : 0;
-        if (delta != 0 && cursor == 0) {
-            cycleFighter(0, delta);
-        }
-        if (((keys & PAD_CONFIRM) && cursor == 1) || (keys & PAD_BUTTON_START) ||
-            (getenv("MELEE_TACTICS_AUTOSTART") &&
-             frames == (getenv("MELEE_TACTICS_READY_FRAME") ? atoi(getenv("MELEE_TACTICS_READY_FRAME")) : 120)))
-        {
-            online_ready = true;
-        }
+    if (keys & PAD_ANY_UP) {
+        cursor = (cursor + rows - 1) % rows;
+    }
+    if (keys & PAD_ANY_DOWN) {
+        cursor = (cursor + 1) % rows;
+    }
+}
+
+static void startFight(void)
+{
+    auto_started = true;
+    gm_801A4B60();
+}
+
+static void mainMenu(u64 keys, OnlineLobbyView* view)
+{
+    int rows = tactics_NetAvailable() ? MAIN_ROWS : 1;
+    bool pick = (keys & (PAD_CONFIRM | PAD_BUTTON_START)) != 0;
+
+    moveCursor(keys, rows);
+    if (scripted() != NULL && screen_frames == 30) {
+        cursor = scriptedOnline() != NULL ? 1 : 0;
+        pick = true;
+    }
+    if (pick) {
+        menu_note[0] = '\0';
+        goScreen(cursor == 0 ? SCR_CPU : SCR_ONLINE);
+        return;
     }
     if (keys & PAD_CANCEL) {
-        pc_log_line("tactics: left the online draft");
         gm_ChangeGameModeAfterCurrentScene(GM_MENU);
         gm_801A4B60();
         return;
     }
-    if (online_ready) {
-        int c1, c2;
-
-        if (tactics_NetLobby(draft[0].ckind, &online_seed, &c1, &c2)) {
-            online_ckind[0] = c1;
-            online_ckind[1] = c2;
-            online_agreed = true;
-            auto_started = true;
-            gm_801A4B60();
-            return;
-        }
-    } else {
-        tactics_NetPoll();
-    }
-    view.title = "MELEE TACTICS ONLINE";
-    view.screen = LOBBY_SCREEN_MENU;
-    view.cursor = online_ready ? -1 : cursor;
-    view.menu_count = 2;
-    snprintf(view.subtitle, sizeof(view.subtitle), "You are P%d (%s)", local + 1,
-             local == 0 ? "host" : "guest");
-    snprintf(view.menu[0], sizeof(view.menu[0]), "Your fighter: %s",
-             tactics_FighterName(draft[0].ckind));
-    snprintf(view.menu[1], sizeof(view.menu[1]), online_ready ? "READY - waiting" : "READY");
-    snprintf(view.message, sizeof(view.message), "%s",
-             tactics_NetStatus()[0] != '\0' ? tactics_NetStatus() : "Connecting...");
-    view.hint = "Left/Right fighter   START ready   B leave";
-    mnOnlineLobby_Update(&view);
+    view->title = "MELEE TACTICS";
+    snprintf(view->subtitle, sizeof view->subtitle, "1 stock, until a knockout");
+    snprintf(view->menu[0], sizeof view->menu[0], "VS CPU");
+    snprintf(view->menu[1], sizeof view->menu[1], "ONLINE");
+    view->menu_count = rows;
+    snprintf(view->message, sizeof view->message, "%s", result);
+    view->hint = "Up/Down choose   A select";
 }
 
-void tactics_DraftFrame(void)
+/* The draft against the CPU, or against a second player on this machine. */
+static void cpuMenu(u64 keys, OnlineLobbyView* view)
 {
-    u64 keys = gm_GetButtonsTriggered(4);
-    OnlineLobbyView view = { 0 };
-    int delta;
+    int delta = (keys & PAD_ANY_RIGHT) ? 1 : (keys & PAD_ANY_LEFT) ? -1 : 0;
 
-    if (tactics_NetOn()) {
-        netDraftFrame();
-        return;
-    }
-    frames++;
-    if (keys & PAD_ANY_UP) {
-        cursor = (cursor + MENU_ROWS - 1) % MENU_ROWS;
-    }
-    if (keys & PAD_ANY_DOWN) {
-        cursor = (cursor + 1) % MENU_ROWS;
-    }
-    delta = (keys & PAD_ANY_RIGHT) ? 1 : (keys & PAD_ANY_LEFT) ? -1 : 0;
+    moveCursor(keys, MENU_ROWS);
     if (delta != 0 && (cursor == 0 || cursor == 1)) {
         cycleFighter(cursor, delta);
     }
@@ -1006,29 +1054,193 @@ void tactics_DraftFrame(void)
         p2_cpu = !p2_cpu;
     }
     if (keys & PAD_CANCEL) {
-        gm_ChangeGameModeAfterCurrentScene(GM_MENU);
-        gm_801A4B60();
+        goScreen(SCR_MAIN);
         return;
     }
     if (((keys & PAD_CONFIRM) && cursor == 3) || (keys & PAD_BUTTON_START) ||
-        (frames == 120 && !auto_started && getenv("MELEE_TACTICS_AUTOSTART")))
+        (scripted() != NULL && screen_frames == 90))
     {
-        auto_started = true;
-        gm_801A4B60();
+        startFight();
         return;
     }
-    view.title = "MELEE TACTICS";
+    view->title = "VS CPU";
+    snprintf(view->subtitle, sizeof view->subtitle, "1 stock, until a knockout");
+    snprintf(view->menu[0], sizeof view->menu[0], "P1: %s", tactics_FighterName(draft[0].ckind));
+    snprintf(view->menu[1], sizeof view->menu[1], "P2: %s", tactics_FighterName(draft[1].ckind));
+    snprintf(view->menu[2], sizeof view->menu[2], "P2 plays: %s", p2_cpu ? "CPU" : "Human");
+    snprintf(view->menu[3], sizeof view->menu[3], "FIGHT");
+    view->menu_count = MENU_ROWS;
+    snprintf(view->message, sizeof view->message, "%s", result);
+    view->hint = "Left/Right change   START fight   B back";
+}
+
+static void onlineMenu(u64 keys, OnlineLobbyView* view)
+{
+    int delta = (keys & PAD_ANY_RIGHT) ? 1 : (keys & PAD_ANY_LEFT) ? -1 : 0;
+    bool pick = (keys & (PAD_CONFIRM | PAD_BUTTON_START)) != 0;
+
+    moveCursor(keys, ONLINE_ROWS);
+    if (delta != 0 && cursor == 0) {
+        cycleMine(delta);
+    }
+    if (scriptedOnline() != NULL && screen_frames == 30) {
+        cursor = strcmp(scriptedOnline(), "host") == 0 ? 1 : 2;
+        pick = true;
+    }
+    if (keys & PAD_CANCEL) {
+        goScreen(SCR_MAIN);
+        return;
+    }
+    if (pick && cursor == 1) {
+        char name[PC_LINK_NAME_LEN];
+
+        snprintf(name, sizeof name, "%s", tactics_FighterName(my_ckind));
+        online_ready = false;
+        tactics_NetHost(name);
+        goScreen(SCR_LOBBY);
+        return;
+    }
+    if (pick && cursor == 2) {
+        found_n = -1;
+        pc_link_refresh();
+        goScreen(SCR_FIND);
+        return;
+    }
+    view->title = "ONLINE";
+    snprintf(view->subtitle, sizeof view->subtitle, "Play against another player");
+    snprintf(view->menu[0], sizeof view->menu[0], "Your fighter: %s", tactics_FighterName(my_ckind));
+    snprintf(view->menu[1], sizeof view->menu[1], "CREATE LOBBY");
+    snprintf(view->menu[2], sizeof view->menu[2], "FIND A LOBBY");
+    view->menu_count = ONLINE_ROWS;
+    snprintf(view->message, sizeof view->message, "%s", menu_note);
+    view->hint = "Left/Right fighter   A select   B back";
+}
+
+/* The open lobbies, from the page server; refreshed while this is up. */
+static void findMenu(u64 keys, OnlineLobbyView* view)
+{
+    int i;
+
+    if (screen_frames % LOBBY_REFRESH_FRAMES == 0) {
+        pc_link_refresh();
+    }
+    found_n = pc_link_lobbies(found, LOBBY_LIST_MAX);
+    moveCursor(keys, found_n);
+    if (keys & PAD_CANCEL) {
+        goScreen(SCR_ONLINE);
+        return;
+    }
+    if (found_n > 0 && ((keys & (PAD_CONFIRM | PAD_BUTTON_START)) || scriptedOnline() != NULL)) {
+        if (cursor >= found_n) {
+            cursor = 0;
+        }
+        online_ready = false;
+        tactics_NetJoin(found[cursor].room);
+        goScreen(SCR_LOBBY);
+        return;
+    }
+    view->title = "FIND A LOBBY";
+    snprintf(view->subtitle, sizeof view->subtitle, "Your fighter: %s", tactics_FighterName(my_ckind));
+    for (i = 0; i < found_n && i < LOBBY_LIST_MAX; i++) {
+        snprintf(view->menu[i], sizeof view->menu[i], "%s", found[i].name);
+    }
+    view->menu_count = found_n > 0 ? found_n : 0;
+    snprintf(view->message, sizeof view->message, "%s",
+             found_n < 0    ? "Looking for lobbies..."
+             : found_n == 0 ? "No open lobbies yet. Create one, or wait here."
+                            : "");
+    view->hint = "Up/Down choose   A join   B back";
+}
+
+/* A lobby, hosted or joined: pick a fighter, READY, and the match starts
+ * once both players are ready. */
+static void lobbyMenu(u64 keys, OnlineLobbyView* view)
+{
+    int delta = (keys & PAD_ANY_RIGHT) ? 1 : (keys & PAD_ANY_LEFT) ? -1 : 0;
+    const char* ready_at = getenv("MELEE_TACTICS_READY_FRAME");
+
+    if (keys & PAD_CANCEL) {
+        pc_log_line("tactics: left the lobby");
+        tactics_NetLeave();
+        online_ready = false;
+        goScreen(SCR_ONLINE);
+        return;
+    }
+    if (!online_ready) {
+        bool ready;
+
+        moveCursor(keys, 2);
+        if (delta != 0 && cursor == 0) {
+            cycleMine(delta);
+        }
+        ready = ((keys & PAD_CONFIRM) && cursor == 1) || (keys & PAD_BUTTON_START);
+        /* A scripted run readies at MELEE_TACTICS_READY_FRAME, or as soon as
+         * the other player is here. */
+        if (scriptedOnline() != NULL) {
+            ready = ready_at != NULL ? screen_frames >= atoi(ready_at) : true;
+        }
+        if (ready && tactics_NetConnected()) {
+            online_ready = true;
+        }
+    }
+    if (online_ready) {
+        int c1, c2;
+
+        if (tactics_NetLobby(my_ckind, &online_seed, &c1, &c2)) {
+            online_ckind[0] = c1;
+            online_ckind[1] = c2;
+            online_agreed = true;
+            startFight();
+            return;
+        }
+    } else {
+        tactics_NetPoll();
+    }
+    view->title = tactics_NetLocalPort() == 0 ? "YOUR LOBBY" : "LOBBY";
+    snprintf(view->subtitle, sizeof view->subtitle, "You are P%d", tactics_NetLocalPort() + 1);
+    snprintf(view->menu[0], sizeof view->menu[0], "Your fighter: %s", tactics_FighterName(my_ckind));
+    snprintf(view->menu[1], sizeof view->menu[1], "%s",
+             online_ready             ? "READY - waiting for the other player"
+             : tactics_NetConnected() ? "READY"
+                                      : "READY (once someone joins)");
+    view->menu_count = 2;
+    if (online_ready) {
+        view->cursor = -1;
+    }
+    snprintf(view->message, sizeof view->message, "%s", tactics_NetStatus());
+    view->hint = "Left/Right fighter   A ready   B leave";
+}
+
+void tactics_DraftFrame(void)
+{
+    u64 keys = gm_GetButtonsTriggered(4);
+    OnlineLobbyView view = { 0 };
+
+    frames++;
+    screen_frames++;
     view.screen = LOBBY_SCREEN_MENU;
-    view.cursor = cursor;
-    view.menu_count = MENU_ROWS;
-    snprintf(view.subtitle, sizeof(view.subtitle), "1 stock, until a knockout");
-    snprintf(view.menu[0], sizeof(view.menu[0]), "P1: %s",
-             tactics_FighterName(draft[0].ckind));
-    snprintf(view.menu[1], sizeof(view.menu[1]), "P2: %s",
-             tactics_FighterName(draft[1].ckind));
-    snprintf(view.menu[2], sizeof(view.menu[2]), "P2 plays: %s", p2_cpu ? "CPU" : "Human");
-    snprintf(view.menu[3], sizeof(view.menu[3]), "FIGHT");
-    snprintf(view.message, sizeof(view.message), "%s", result);
-    view.hint = "Up/Down row   Left/Right change   START fight";
+    switch (screen) {
+    case SCR_MAIN:
+        mainMenu(keys, &view);
+        break;
+    case SCR_CPU:
+        cpuMenu(keys, &view);
+        break;
+    case SCR_ONLINE:
+        onlineMenu(keys, &view);
+        break;
+    case SCR_FIND:
+        findMenu(keys, &view);
+        break;
+    case SCR_LOBBY:
+        lobbyMenu(keys, &view);
+        break;
+    }
+    if (view.title == NULL) {
+        return; /* the screen changed or the scene is leaving */
+    }
+    if (view.cursor != -1) {
+        view.cursor = cursor;
+    }
     mnOnlineLobby_Update(&view);
 }

@@ -1,10 +1,11 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
-/* The browser link (src/pc/link.h): a WebRTC data channel, reliable and
- * ordered, that the page opens through the signaling server before the game
- * starts (link.mjs). The game runs on the page's main thread, so these calls
- * reach Module.tacticsLink directly. No link object: offline play. */
+/* The browser link (src/pc/link.h), driven by the game's menus: the page's
+ * link manager (link.mjs, Module.tacticsLink) opens a WebRTC data channel
+ * through the page server, and lists that server's open lobbies. The game
+ * runs on the page's main thread, so these calls reach it directly. */
 #include <emscripten.h>
 #include <stddef.h>
+#include <stdio.h>
 
 #include "monocypher.h"
 #include <pc/link.h>
@@ -12,31 +13,86 @@
 int dht_random_bytes(void* buf, size_t size);
 
 // clang-format off
+EM_JS(int, link_web_available, (void), {
+  return Module.tacticsLink ? 1 : 0;
+});
+EM_JS(int, link_web_host, (const char* name), {
+  return Module.tacticsLink ? Module.tacticsLink.host(UTF8ToString(name)) : 0;
+});
+EM_JS(int, link_web_join, (const char* room), {
+  return Module.tacticsLink ? Module.tacticsLink.join(UTF8ToString(room)) : 0;
+});
+EM_JS(void, link_web_refresh, (void), {
+  if (Module.tacticsLink) Module.tacticsLink.refresh();
+});
+EM_JS(int, link_web_lobby_count, (void), {
+  const list = Module.tacticsLink && Module.tacticsLink.lobbies();
+  return list ? list.length : -1;
+});
+EM_JS(void, link_web_lobby, (int i, char* room, int room_len, char* name, int name_len), {
+  const lobby = Module.tacticsLink.lobbies()[i];
+  stringToUTF8(lobby.room, room, room_len);
+  stringToUTF8(lobby.name, name, name_len);
+});
+EM_JS(void, link_web_room, (char* out, int len), {
+  stringToUTF8(Module.tacticsLink ? Module.tacticsLink.room() : '', out, len);
+});
 EM_JS(int, link_web_state, (void), {
-  const link = Module.tacticsLink;
-  return link ? link.state() : 0;
+  return Module.tacticsLink ? Module.tacticsLink.state() : 0;
 });
 EM_JS(int, link_web_is_host, (void), {
-  const link = Module.tacticsLink;
-  return link && link.isHost ? 1 : 0;
+  return Module.tacticsLink && Module.tacticsLink.isHost ? 1 : 0;
 });
 EM_JS(int, link_web_send, (const void* msg, int len), {
-  const link = Module.tacticsLink;
-  return link ? link.send(HEAPU8.slice(msg, msg + len)) : 0;
+  return Module.tacticsLink ? Module.tacticsLink.send(HEAPU8.slice(msg, msg + len)) : 0;
 });
 EM_JS(int, link_web_recv, (void* buf, int cap), {
-  const link = Module.tacticsLink;
-  const msg = link && link.recv();
+  const msg = Module.tacticsLink && Module.tacticsLink.recv();
   if (!msg) return 0;
   if (msg.length > cap) return -1;
   HEAPU8.set(msg, buf);
   return msg.length;
 });
 EM_JS(void, link_web_close, (void), {
-  const link = Module.tacticsLink;
-  if (link) link.close();
+  if (Module.tacticsLink) Module.tacticsLink.close();
 });
 // clang-format on
+
+bool pc_link_available(void) {
+    return link_web_available() != 0;
+}
+
+bool pc_link_host(const char* name) {
+    return link_web_host(name) != 0;
+}
+
+bool pc_link_join(const char* room) {
+    return link_web_join(room) != 0;
+}
+
+void pc_link_refresh(void) {
+    link_web_refresh();
+}
+
+int pc_link_lobbies(PcLinkLobby* out, int cap) {
+    int n = link_web_lobby_count();
+    int i;
+
+    if (n < 0) {
+        return -1;
+    }
+    for (i = 0; i < n && i < cap; i++) {
+        link_web_lobby(i, out[i].room, sizeof out[i].room, out[i].name, sizeof out[i].name);
+    }
+    return i;
+}
+
+const char* pc_link_room(void) {
+    static char room[PC_LINK_ROOM_LEN];
+
+    link_web_room(room, sizeof room);
+    return room;
+}
 
 PcLinkState pc_link_state(void) {
     switch (link_web_state()) {

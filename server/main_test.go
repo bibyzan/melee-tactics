@@ -4,6 +4,8 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"io"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -73,6 +75,68 @@ func TestRoom(t *testing.T) {
 	if m := read(t, ctx, host); m.Type != "peer-left" {
 		t.Fatalf("host got %q, want peer-left", m.Type)
 	}
+}
+
+func lobbies(t *testing.T, base string) []lobby {
+	t.Helper()
+	res, err := httpGet(base + "/lobbies")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var list []lobby
+	if err := json.Unmarshal(res, &list); err != nil {
+		t.Fatalf("decode %q: %v", res, err)
+	}
+	return list
+}
+
+func TestLobbies(t *testing.T) {
+	h := &hub{rooms: map[string]*room{}}
+	srv := httptest.NewServer(isolated(httpMux(h)))
+	defer srv.Close()
+	url := "ws" + strings.TrimPrefix(srv.URL, "http")
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	if got := lobbies(t, srv.URL); len(got) != 0 {
+		t.Fatalf("empty server lists %v", got)
+	}
+	// A guest cannot open a room.
+	stray := dial(t, ctx, url, "NOHOST1", "guest")
+	if m := read(t, ctx, stray); m.Type != "error" {
+		t.Fatalf("guest of a missing lobby got %q, want error", m.Type)
+	}
+
+	host, _, err := websocket.Dial(ctx, url+"/ws?room=LOBBY1&role=host&name=Ganondorf%0Aby%20Ben", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer host.Close(websocket.StatusNormalClosure, "")
+	var got []lobby
+	for i := 0; i < 50 && len(got) == 0; i++ {
+		got = lobbies(t, srv.URL)
+		time.Sleep(10 * time.Millisecond)
+	}
+	if len(got) != 1 || got[0].Room != "LOBBY1" || got[0].Name != "Ganondorfby Ben" {
+		t.Fatalf("lobbies = %+v, want LOBBY1 named without the control character", got)
+	}
+
+	// Once an opponent is in, the lobby is no longer open.
+	guest := dial(t, ctx, url, "LOBBY1", "guest")
+	defer guest.Close(websocket.StatusNormalClosure, "")
+	read(t, ctx, guest)
+	if got := lobbies(t, srv.URL); len(got) != 0 {
+		t.Fatalf("full lobby still listed: %v", got)
+	}
+}
+
+func httpGet(url string) ([]byte, error) {
+	res, err := http.Get(url)
+	if err != nil {
+		return nil, err
+	}
+	defer res.Body.Close()
+	return io.ReadAll(res.Body)
 }
 
 func TestIsolationHeaders(t *testing.T) {

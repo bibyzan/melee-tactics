@@ -27,6 +27,7 @@ import (
 	"net/http"
 	"os"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -39,8 +40,18 @@ const defaultICE = `[{"urls":"stun:stun.l.google.com:19302"}]`
 var roomPattern = regexp.MustCompile(`^[A-Z0-9]{4,12}$`)
 
 // A room holds at most a host and a guest, and relays signaling between them.
+// A room with a host and no guest is an open lobby, listed at /lobbies.
 type room struct {
-	peers map[string]*peer // "host", "guest"
+	peers   map[string]*peer // "host", "guest"
+	name    string           // what the lobby list shows
+	created time.Time
+}
+
+// lobby is one entry of /lobbies.
+type lobby struct {
+	Room string `json:"room"`
+	Name string `json:"name"`
+	Age  int    `json:"age"` // seconds open
 }
 
 type peer struct {
@@ -71,17 +82,27 @@ func other(role string) string {
 	return "host"
 }
 
-// join puts p in the room, or says why it cannot.
-func (h *hub) join(code, role string, p *peer) error {
+// join puts p in the room, or says why it cannot. A host opens the room; a
+// guest can only join one whose host is still there.
+func (h *hub) join(code, role, name string, p *peer) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	r := h.rooms[code]
 	if r == nil {
-		r = &room{peers: map[string]*peer{}}
+		if role == "guest" {
+			return errors.New("that lobby is no longer open")
+		}
+		r = &room{peers: map[string]*peer{}, created: time.Now()}
 		h.rooms[code] = r
 	}
 	if r.peers[role] != nil {
-		return errors.New("that room already has a " + role)
+		if role == "guest" {
+			return errors.New("that lobby already has an opponent")
+		}
+		return errors.New("that room already has a host")
+	}
+	if role == "host" {
+		r.name = name
 	}
 	r.peers[role] = p
 	if q := r.peers[other(role)]; q != nil {
@@ -106,6 +127,41 @@ func (h *hub) leave(code, role string, p *peer) {
 	if len(r.peers) == 0 {
 		delete(h.rooms, code)
 	}
+}
+
+// lobbies lists the rooms waiting for an opponent, newest first.
+func (h *hub) lobbies() []lobby {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	now := time.Now()
+	list := []lobby{}
+	for code, r := range h.rooms {
+		if r.peers["host"] != nil && r.peers["guest"] == nil {
+			list = append(list, lobby{Room: code, Name: r.name, Age: int(now.Sub(r.created).Seconds())})
+		}
+	}
+	sort.Slice(list, func(i, j int) bool { return list[i].Age < list[j].Age })
+	if len(list) > 50 {
+		list = list[:50]
+	}
+	return list
+}
+
+// lobbyName keeps what a host calls its lobby short and printable.
+func lobbyName(s, code string) string {
+	var b strings.Builder
+	for _, c := range s {
+		if b.Len() >= 24 {
+			break
+		}
+		if c >= ' ' && c <= '~' {
+			b.WriteRune(c)
+		}
+	}
+	if name := strings.TrimSpace(b.String()); name != "" {
+		return name
+	}
+	return "Lobby " + code
 }
 
 func (h *hub) relay(code, role string, m []byte) {
@@ -143,7 +199,7 @@ func (h *hub) serveWS(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
 
-	if err := h.join(code, role, p); err != nil {
+	if err := h.join(code, role, lobbyName(r.URL.Query().Get("name"), code), p); err != nil {
 		wctx, wcancel := context.WithTimeout(ctx, 5*time.Second)
 		conn.Write(wctx, websocket.MessageText, encode(message{Type: "error", Message: err.Error()}))
 		wcancel()
@@ -240,6 +296,11 @@ func httpMux(h *hub) *http.ServeMux {
 		w.Write([]byte(`{"iceServers":` + string(iceServers) + `}`))
 	})
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) { w.Write([]byte("ok")) })
+	mux.HandleFunc("/lobbies", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Cache-Control", "no-store")
+		json.NewEncoder(w).Encode(h.lobbies())
+	})
 	if devDisc != "" {
 		// Local testing only: the page streams this disc (?dev_disc=1)
 		// instead of asking for a file in every tab. Never set in a

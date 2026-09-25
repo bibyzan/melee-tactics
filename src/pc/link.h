@@ -12,21 +12,46 @@ extern "C" {
  * order. A tactics match only ever exchanges picks, so this is all it needs;
  * the rollback netplay in net.c is not involved.
  *
- * Native (src/pc/link.c): TCP. MELEE_LINK_LISTEN=<port> hosts,
- * MELEE_LINK_CONNECT=<host:port> joins.
- * Browser (platforms/browser/link_web.c): a WebRTC data channel the page
- * opens through the signaling server; the page says which side hosts. */
+ * The game drives it from its own menus: host a lobby, or list the open ones
+ * and join one. A session lasts from pc_link_host / pc_link_join to
+ * pc_link_close.
+ *
+ * Browser (platforms/browser/link_web.c): a WebRTC data channel set up
+ * through the page server, which also keeps the list of open lobbies.
+ * Native (src/pc/link.c): TCP, for testing. Hosting listens on
+ * MELEE_LINK_PORT (default 47100); the lobby list is MELEE_LINK_CONNECT
+ * (host:port), if set. */
 
 enum {
     PC_LINK_MAX_MESSAGE = 1024,
+    PC_LINK_ROOM_LEN = 24,
+    PC_LINK_NAME_LEN = 32,
 };
 
 typedef enum PcLinkState {
-    PC_LINK_NONE,       ///< not asked for: play offline
+    PC_LINK_NONE,       ///< no session
     PC_LINK_CONNECTING, ///< waiting for the other player
     PC_LINK_OPEN,
     PC_LINK_CLOSED,     ///< the other player left or the link failed
 } PcLinkState;
+
+typedef struct PcLinkLobby {
+    char room[PC_LINK_ROOM_LEN];
+    char name[PC_LINK_NAME_LEN];
+} PcLinkLobby;
+
+/* This build can play online at all. */
+bool pc_link_available(void);
+/* Open a lobby others can find under name; this side hosts (P1). */
+bool pc_link_host(const char* name);
+/* Join an open lobby from pc_link_lobbies. */
+bool pc_link_join(const char* room);
+/* Ask for a fresh list of open lobbies. */
+void pc_link_refresh(void);
+/* The latest list, up to cap entries; -1 until the first list arrives. */
+int pc_link_lobbies(PcLinkLobby* out, int cap);
+/* The room this side hosts or joined, or "". */
+const char* pc_link_room(void);
 
 /* Services the connection without blocking; call once per frame. */
 PcLinkState pc_link_state(void);
@@ -36,6 +61,7 @@ bool pc_link_is_host(void);
 bool pc_link_send(const void* msg, int len);
 /* One whole message into buf, returning its length, or 0 when none. */
 int pc_link_recv(void* buf, int cap);
+/* End the session; pc_link_state is PC_LINK_NONE after. */
 void pc_link_close(void);
 
 /* For the picks' commit and reveal: BLAKE2b, and bytes from the platform's

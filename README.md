@@ -57,9 +57,9 @@ docker build -t melee-tactics .
 docker run --rm -p 8080:8080 melee-tactics
 ```
 
-Open `http://localhost:8080`, choose the disc, and press **Create room**. Send the link it shows to the other player, who opens it and presses **Join room**. Each side picks its own fighter in the draft. The match starts when both are ready. **Play vs CPU** plays offline.
+Open `http://localhost:8080` and choose your disc. The page keeps a copy in the browser's private storage, so later visits go straight into the game. Everything else is in game: **VS CPU**, or **ONLINE**, where you **CREATE LOBBY** or **FIND A LOBBY** from the list of open ones. Each player picks a fighter and presses **READY**, and the match starts when both are ready.
 
-How it stays in sync: both browsers run the same match from a seed the host picks, so the only thing sent is the picks. The server introduces the two browsers over a WebSocket (`/ws`), and they then talk directly over a WebRTC data channel, so the server is out of the match. A pick is sent as a hash first and revealed only once both sides have committed, so neither side can see the other's pick early. Each break also compares a checksum of the fight to catch a desync.
+How it stays in sync: both browsers run the same match from a seed the host picks, so the only thing sent is the picks. The server lists open lobbies (`/lobbies`) and introduces the two browsers over a WebSocket (`/ws`). They then talk directly over a WebRTC data channel, so the server is out of the match. A pick is sent as a hash first and revealed only once both sides have committed, so neither side can see the other's pick early. Each break also compares a checksum of the fight to catch a desync.
 
 The page needs a secure origin for its threads. `localhost` works over plain HTTP. Another machine on the LAN needs HTTPS: start the server with `TLS_CERT` and `TLS_KEY`, for example a certificate from `mkcert`. On fly.io (`fly.toml`), fly's proxy provides HTTPS. Keep one machine there, because rooms live in the server's memory. `ICE_SERVERS` adds TURN for players behind strict NATs.
 

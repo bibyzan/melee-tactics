@@ -165,8 +165,17 @@ u32 tactics_SyncChecksum(void);
 int tactics_SyncBreak(void);
 
 /* tacticsnet.c: a match against another machine over pc_link */
-/// A link was asked for (MELEE_LINK_*, or the browser page's room).
+/// This build can play online (pc_link_available).
+bool tactics_NetAvailable(void);
+/// Open a lobby under name (this side hosts, P1), or join one by its room.
+bool tactics_NetHost(const char* name);
+bool tactics_NetJoin(const char* room);
+/// End the session.
+void tactics_NetLeave(void);
+/// A session is under way (hosting or joined).
 bool tactics_NetOn(void);
+/// The other player is connected.
+bool tactics_NetConnected(void);
 /// 0 on the host (P1), 1 on the guest (P2).
 int tactics_NetLocalPort(void);
 /// What to tell the player about the connection.
@@ -181,6 +190,8 @@ void tactics_NetBreak(int n);
 void tactics_NetSendPick(int pick, u32 sum);
 /// True once the other side's pick is revealed and verified (-1: not choosing).
 bool tactics_NetTheirPick(int* pick);
+/// The other side has committed its pick for this break.
+bool tactics_NetTheyCommitted(void);
 /// This side has committed and the other side's reveal is still out.
 bool tactics_NetWaiting(void);
 

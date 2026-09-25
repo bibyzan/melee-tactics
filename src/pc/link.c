@@ -49,7 +49,8 @@ static void set_nonblocking(sock_t s) {
 enum { BUF = 16384 };
 
 static struct {
-    bool started, host;
+    bool host;
+    char room[PC_LINK_ROOM_LEN];
     PcLinkState state;
     sock_t listener, conn;
     struct sockaddr_storage peer;
@@ -122,26 +123,70 @@ static bool resolve_peer(const char* spec) {
     return true;
 }
 
-static void start(void) {
-    const char* listen_port = getenv("MELEE_LINK_LISTEN");
-    const char* connect_to = getenv("MELEE_LINK_CONNECT");
+/* A fresh session: whatever the last one left behind is dropped. */
+static void begin(bool host, const char* room) {
+    static bool winsock;
 
-    L.started = true;
-    L.state = PC_LINK_NONE;
-    if (listen_port == NULL && connect_to == NULL) {
-        return;
+    if (L.conn != SOCK_BAD || L.listener != SOCK_BAD) {
+        fail("new session");
     }
 #ifdef _WIN32
-    {
+    if (!winsock) {
         WSADATA wsa;
         WSAStartup(MAKEWORD(2, 2), &wsa);
+        winsock = true;
     }
+#else
+    (void)winsock;
 #endif
-    L.host = listen_port != NULL;
+    L.host = host;
+    L.in_len = L.out_len = 0;
+    snprintf(L.room, sizeof L.room, "%s", room);
     L.state = PC_LINK_CONNECTING;
-    if (L.host ? !start_listen(listen_port) : !resolve_peer(connect_to)) {
-        fail("setup");
+}
+
+bool pc_link_available(void) {
+    return true;
+}
+
+bool pc_link_host(const char* name) {
+    const char* port = getenv("MELEE_LINK_PORT") ? getenv("MELEE_LINK_PORT") : "47100";
+
+    (void)name;
+    begin(true, port);
+    if (!start_listen(port)) {
+        fail("cannot listen");
+        return false;
     }
+    return true;
+}
+
+bool pc_link_join(const char* room) {
+    begin(false, room);
+    if (!resolve_peer(room)) {
+        fail("cannot resolve the host");
+        return false;
+    }
+    return true;
+}
+
+void pc_link_refresh(void) {
+}
+
+/* Natively the only lobby is the host named by MELEE_LINK_CONNECT. */
+int pc_link_lobbies(PcLinkLobby* out, int cap) {
+    const char* host = getenv("MELEE_LINK_CONNECT");
+
+    if (host == NULL || cap < 1) {
+        return 0;
+    }
+    snprintf(out[0].room, sizeof out[0].room, "%s", host);
+    snprintf(out[0].name, sizeof out[0].name, "Host at %s", host);
+    return 1;
+}
+
+const char* pc_link_room(void) {
+    return L.state == PC_LINK_NONE ? "" : L.room;
 }
 
 /* Guest: a non-blocking connect, retried until the host is listening. */
@@ -224,9 +269,6 @@ static void pump(void) {
 }
 
 PcLinkState pc_link_state(void) {
-    if (!L.started) {
-        start();
-    }
     if (L.state == PC_LINK_CONNECTING) {
         if (L.host) {
             sock_t c = accept(L.listener, NULL, NULL);
@@ -253,9 +295,6 @@ PcLinkState pc_link_state(void) {
 }
 
 bool pc_link_is_host(void) {
-    if (!L.started) {
-        start();
-    }
     return L.host;
 }
 
@@ -300,6 +339,11 @@ void pc_link_close(void) {
     if (L.state == PC_LINK_OPEN || L.state == PC_LINK_CONNECTING) {
         fail("closed here");
     }
+    if (L.conn != SOCK_BAD || L.listener != SOCK_BAD) {
+        fail("closed here");
+    }
+    L.state = PC_LINK_NONE;
+    L.in_len = L.out_len = 0;
 }
 
 void pc_link_hash(void* out, int out_len, const void* msg, int len) {

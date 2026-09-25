@@ -1,34 +1,32 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Minimal host page for the browser build: disc picker, canvas, persistence.
-// The engine's whole host interface is the handful of Module fields set here.
+// Melee Tactics' page. The only thing on it is the disc: the first visit asks
+// for the player's own Melee image, the page keeps a copy in the browser's
+// private storage (OPFS), and later visits go straight into the game. Every
+// menu, against the CPU or online, is in the game itself; online play goes
+// through Module.tacticsLink (link.mjs).
 import { createDiscCache } from './disc-cache.mjs';
-import { createLink } from './link.mjs';
+import { createLinkManager } from './link.mjs';
 
 const $ = (id) => document.getElementById(id);
 const lines = [];
 function log(text) {
   lines.push(String(text));
-  $('log').textContent = lines.slice(-80).join('\n');
+  $('log').textContent = lines.slice(-200).join('\n');
   console.log(text);
 }
 const status = (text) => { $('status').textContent = text; };
 
-// Rolling frame statistics; also read by tests/browser/shell-e2e.mjs.
+// Rolling frame times; read by tests/browser/shell-e2e.mjs.
 const frames = { count: 0, last: 0, samples: [] };
 window.meleeFrames = frames;
 function onFrame() {
   const now = performance.now();
   if (frames.last) {
     frames.samples.push(now - frames.last);
-    if (frames.samples.length > 7200) frames.samples.shift(); // two minutes
+    if (frames.samples.length > 7200) frames.samples.shift();
   }
   frames.last = now;
-  if (++frames.count % 30 === 0 && frames.samples.length > 60) {
-    const recent = frames.samples.slice(-120);
-    const sorted = [...recent].sort((a, b) => a - b);
-    const fps = 1000 * recent.length / recent.reduce((a, b) => a + b, 0);
-    $('stats').textContent = `${fps.toFixed(1)} fps · p99 ${sorted[Math.floor(sorted.length * 0.99)].toFixed(1)} ms`;
-  }
+  frames.count++;
 }
 
 function syncfs(populate) {
@@ -36,17 +34,95 @@ function syncfs(populate) {
     Module.FS.syncfs(populate, (error) => (error ? reject(error) : resolve())));
 }
 
-// Any MELEE_* query parameter becomes an environment variable, so the knobs in
-// docs/testing.md work unchanged: ?MELEE_BOOT_SCENE=vs&MELEE_SEED=1
-// This page is Melee Tactics: it boots into the tactics draft unless told
-// otherwise.
+// The page boots into Melee Tactics' menus. Any MELEE_* query parameter
+// becomes an environment variable (docs/testing.md): ?MELEE_SEED=1
 const ENV = { MELEE_BOOT_SCENE: 'tactics' };
 const params = new URLSearchParams(location.search);
 for (const [key, value] of params) {
   if (/^MELEE_[A-Z0-9_]+$/.test(key)) ENV[key] = value;
 }
-// ?room=CODE joins the other player's room.
-const joinRoom = params.get('room');
+
+// ---- the disc ------------------------------------------------------------
+
+const DISC = 'melee.iso';
+const DISC_DONE = 'melee.iso.done'; // written last: the copy is whole
+
+async function isMelee(file) {
+  const head = new Uint8Array(await file.slice(0, 6).arrayBuffer());
+  return String.fromCharCode(...head) === 'GALE01';
+}
+
+async function rememberedDisc() {
+  try {
+    const dir = await navigator.storage.getDirectory();
+    const done = await (await (await dir.getFileHandle(DISC_DONE)).getFile()).text();
+    const file = await (await dir.getFileHandle(DISC)).getFile();
+    if (String(file.size) === done && await isMelee(file)) return file;
+  } catch {}
+  return null;
+}
+
+async function forgetDisc() {
+  const dir = await navigator.storage.getDirectory();
+  for (const name of [DISC_DONE, DISC]) await dir.removeEntry(name).catch(() => {});
+}
+
+// Copy the disc into the page's private storage in the background, so the
+// next visit needs no file. Skipped quietly where the browser cannot.
+async function rememberDisc(file) {
+  try {
+    const dir = await navigator.storage.getDirectory();
+    const estimate = await navigator.storage.estimate?.();
+    if (estimate && estimate.quota - estimate.usage < file.size + 64 * 1024 * 1024) {
+      log('Not enough browser storage to remember the disc.');
+      return;
+    }
+    await navigator.storage.persist?.();
+    await forgetDisc();
+    const handle = await dir.getFileHandle(DISC, { create: true });
+    if (!handle.createWritable) {
+      log('This browser cannot remember the disc; it will ask again next time.');
+      return;
+    }
+    await file.stream().pipeTo(await handle.createWritable());
+    const done = await (await dir.getFileHandle(DISC_DONE, { create: true })).createWritable();
+    await done.write(String(file.size));
+    await done.close();
+    log('Disc remembered for next time.');
+  } catch (error) {
+    log(`Could not remember the disc: ${error.message}`);
+  }
+}
+
+// Local testing only: ?dev_disc=1 streams the disc a local server was
+// started with (DEV_DISC) by range requests. It reads like a File.
+async function devDisc() {
+  const res = await fetch('./dev/disc', { method: 'HEAD' });
+  if (!res.ok) throw Error('this server was started without DEV_DISC');
+  const size = Number(res.headers.get('Content-Length'));
+  return {
+    size,
+    name: 'dev-disc.iso',
+    slice: (start, end) => ({
+      arrayBuffer: async () =>
+        (await fetch('./dev/disc', { headers: { Range: `bytes=${start}-${end - 1}` } })).arrayBuffer(),
+    }),
+  };
+}
+
+// ---- the engine ----------------------------------------------------------
+
+async function iceServers() {
+  try {
+    const config = await (await fetch('./config')).json();
+    if (Array.isArray(config.iceServers)) return config.iceServers;
+  } catch {}
+  return [{ urls: 'stun:stun.l.google.com:19302' }];
+}
+
+let ready = false;
+let disc = null;
+let started = false;
 
 window.Module = {
   // preRun is the one point where this works: Emscripten has created ENV but
@@ -56,94 +132,35 @@ window.Module = {
   print: log,
   printErr: log,
   onFrame,
-  onAbort: (reason) => status(`Engine stopped: ${reason}`),
+  onAbort: (reason) => status(`The game stopped: ${reason}. Reload the page to start again.`),
   onGraphicsPreparation: (done, total) =>
-    status(done === total ? 'Starting…' : `Preparing graphics… ${Math.floor(done * 100 / total)}%`),
-  onRuntimeInitialized: () => { ready = true; status('Choose a GALE01 disc image (.iso or .gcm).'); updateStart(); },
+    status(done === total ? '' : `Preparing graphics… ${Math.floor(done * 100 / total)}%`),
+  onRuntimeInitialized: () => { ready = true; begin(); },
 };
 
-// Not `typeof Module.callMain`: that exists as soon as the script runs, while
-// the wasm is still compiling, and a disc picked by then started a dead runtime.
-let ready = false;
-const buttons = ['cpu', 'create', 'join'];
-if (joinRoom) {
-  $('join').hidden = false;
-  $('join').textContent = `Join room ${joinRoom}`;
-}
-// Local testing only: with ?dev_disc=1 the page streams the disc a local
-// server was started with (DEV_DISC), by range requests, instead of asking
-// for a file in every tab. It reads like a File: size and slice().
-let devDisc = null;
-if (params.get('dev_disc')) {
-  fetch('./dev/disc', { method: 'HEAD' }).then((res) => {
-    if (!res.ok) throw Error('this server was started without DEV_DISC');
-    const size = Number(res.headers.get('Content-Length'));
-    devDisc = {
-      size,
-      name: 'dev-disc.iso',
-      slice: (start, end) => ({
-        arrayBuffer: async () =>
-          (await fetch('./dev/disc', { headers: { Range: `bytes=${start}-${end - 1}` } })).arrayBuffer(),
-      }),
-    };
-    $('disc').hidden = true;
-    updateStart();
-  }).catch((error) => status(`No dev disc: ${error.message}`));
-}
-
-function updateStart() {
-  for (const id of buttons) $(id).disabled = !(ready && (devDisc || $('disc').files.length));
-}
-$('disc').addEventListener('change', updateStart);
-
-// ICE servers come from the page server, so a deployment can add TURN
-// without a new build.
-async function iceServers() {
+async function begin() {
+  if (!ready || !disc || started) {
+    if (ready && !disc) status('');
+    return;
+  }
+  started = true;
   try {
-    const config = await (await fetch('./config')).json();
-    if (Array.isArray(config.iceServers)) return config.iceServers;
-  } catch {}
-  return [{ urls: 'stun:stun.l.google.com:19302' }];
-}
-
-function roomCode() {
-  const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-  return Array.from(crypto.getRandomValues(new Uint8Array(6)), (b) => alphabet[b % alphabet.length]).join('');
-}
-
-$('cpu').addEventListener('click', () => start(null));
-$('create').addEventListener('click', async () => {
-  const room = roomCode();
-  const url = `${location.origin}${location.pathname}?room=${room}`;
-  $('share-link').href = url;
-  $('share-link').textContent = url;
-  $('share').hidden = false;
-  start(createLink({ room, host: true, iceServers: await iceServers(), log }));
-});
-$('join').addEventListener('click', async () =>
-  start(createLink({ room: joinRoom, host: false, iceServers: await iceServers(), log })));
-
-async function start(link) {
-  for (const id of buttons) $(id).disabled = true;
-  $('disc').disabled = true;
-  // The engine polls this through link_web.c; none means offline.
-  Module.tacticsLink = link;
-  try {
-    // The engine reports adapter and device failures itself (onAbort); this
-    // only catches the common case early, before anything is mounted.
-    if (!navigator.gpu) throw Error('This browser has no WebGPU. Try a current Chrome or Edge.');
-    Module.discFile = devDisc || $('disc').files[0];
-    Module.readDisc = createDiscCache(Module.discFile).read;
+    if (!navigator.gpu) throw Error('This browser has no WebGPU. Try a current Chrome, Edge or Safari.');
+    Module.discFile = disc;
+    Module.readDisc = createDiscCache(disc).read;
+    Module.tacticsLink = createLinkManager({ iceServers: await iceServers(), log });
     for (const dir of ['/saves', '/cache']) {
       Module.FS.mkdirTree(dir);
       Module.FS.mount(Module.FS.filesystems.IDBFS, { autoPersist: dir === '/saves' }, dir);
     }
     await syncfs(true);
-    // The pipeline cache is written by a background thread; flush it when the
-    // page is hidden rather than on every write.
+    // The pipeline cache is written by a background thread; flush it when
+    // the page is hidden rather than on every write.
     document.addEventListener('visibilitychange', () => {
       if (document.visibilityState === 'hidden') syncfs(false).catch(log);
     });
+    $('welcome').style.display = 'none';
+    $('game').style.display = 'block';
     status('');
     $('canvas').focus();
     Module.callMain([]);
@@ -152,6 +169,39 @@ async function start(link) {
     log(error.stack || error);
   }
 }
+
+$('disc').addEventListener('change', async () => {
+  const file = $('disc').files[0];
+  if (!file) return;
+  if (!(await isMelee(file))) {
+    status('That is not a Super Smash Bros. Melee (GALE01) disc image.');
+    return;
+  }
+  disc = file;
+  status('Starting…');
+  begin();
+  rememberDisc(file);
+});
+
+$('forget').addEventListener('click', () =>
+  forgetDisc().then(() => status('The disc is forgotten. Reload to choose another.')));
+
+// A remembered disc (or the local dev disc) starts the game without asking.
+(async () => {
+  try {
+    disc = params.get('dev_disc') ? await devDisc() : await rememberedDisc();
+  } catch (error) {
+    status(`No dev disc: ${error.message}`);
+  }
+  if (disc) {
+    $('welcome').style.display = 'none';
+    status('Starting…');
+    begin();
+  } else {
+    $('disc').disabled = false;
+    if (!ready) status('');
+  }
+})();
 
 // Threads need a cross-origin isolated page. Where the server cannot send
 // COOP/COEP (GitHub Pages), coi-sw.js adds them and the page reloads once
