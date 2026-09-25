@@ -64,6 +64,16 @@ func TestRoom(t *testing.T) {
 		t.Fatalf("host got %+v, want the candidate", m)
 	}
 
+	// The relay fallback passes too: the switch, and game messages.
+	host.Write(ctx, websocket.MessageText, []byte(`{"type":"use-relay"}`))
+	if m := read(t, ctx, guest); m.Type != "use-relay" {
+		t.Fatalf("guest got %q, want use-relay", m.Type)
+	}
+	guest.Write(ctx, websocket.MessageText, []byte(`{"type":"relay","data":"SGVsbG8="}`))
+	if m := read(t, ctx, host); m.Type != "relay" || string(m.Data) != `"SGVsbG8="` {
+		t.Fatalf("host got %+v, want the relayed message", m)
+	}
+
 	// A second host is turned away.
 	extra := dial(t, ctx, url, "ABCD23", "host")
 	if m := read(t, ctx, extra); m.Type != "error" {

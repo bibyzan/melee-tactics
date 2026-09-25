@@ -210,8 +210,20 @@ func (h *hub) serveWS(w http.ResponseWriter, r *http.Request) {
 	log.Printf("room %s: %s joined", code, role)
 
 	go func() {
+		// A ping every 20 seconds keeps a quiet connection (both players
+		// thinking over a pick) from being dropped along the way.
+		ping := time.NewTicker(20 * time.Second)
+		defer ping.Stop()
 		for {
 			select {
+			case <-ping.C:
+				pctx, pcancel := context.WithTimeout(ctx, 10*time.Second)
+				err := conn.Ping(pctx)
+				pcancel()
+				if err != nil {
+					cancel()
+					return
+				}
 			case b := <-p.send:
 				wctx, wcancel := context.WithTimeout(ctx, 10*time.Second)
 				err := conn.Write(wctx, websocket.MessageText, b)
@@ -232,12 +244,20 @@ func (h *hub) serveWS(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		var m message
-		if json.Unmarshal(b, &m) != nil || m.Type != "signal" {
+		if json.Unmarshal(b, &m) != nil {
 			continue
 		}
-		// Only signaling passes through, re-encoded: nothing else a client
-		// sends reaches the other side.
-		h.relay(code, role, encode(message{Type: "signal", Data: m.Data}))
+		// Signaling, and the fallback for networks where the browsers cannot
+		// reach each other directly (phones on cellular, mostly): "use-relay"
+		// switches both sides over, and "relay" carries a game message. Each
+		// passes through re-encoded; nothing else a client sends reaches the
+		// other side.
+		switch m.Type {
+		case "signal", "relay":
+			h.relay(code, role, encode(message{Type: m.Type, Data: m.Data}))
+		case "use-relay":
+			h.relay(code, role, encode(message{Type: m.Type}))
+		}
 	}
 }
 

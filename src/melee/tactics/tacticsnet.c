@@ -20,9 +20,17 @@
  *   HELLO  'H' version:u8 ckind:u8
  *   MATCH  'M' seed:u32 p1_ckind:u8 p2_ckind:u8          host to guest
  *   COMMIT 'C' break:u16 sum:u32 hash:32                  hash of NONE_PICK when
- *   REVEAL 'R' break:u16 pick:u8 salt:16                  not choosing */
+ *   REVEAL 'R' break:u16 pick:u8 salt:16                  not choosing
+ *
+ * The link may switch transports mid-session (a direct WebRTC channel that
+ * drops falls back to the server), so a message can be lost. Anything still
+ * unanswered is sent again every RESEND_POLLS polls, duplicates are ignored,
+ * a HELLO after the match is set up gets the MATCH again, a COMMIT for the
+ * last break gets that break's REVEAL again, and a COMMIT for the next break
+ * that arrives early is kept for it. */
 
 enum {
+    RESEND_POLLS = 60,
     VERSION = 1,
     NONE_PICK = 0xFF,
     SALT = 16,
@@ -38,6 +46,8 @@ typedef struct Break {
     u8 my_salt[SALT];
     u8 their_hash[HASH];
     u32 my_sum, their_sum;
+    u8 commit_msg[7 + HASH]; /* as sent, for resending */
+    u8 reveal_msg[4 + SALT];
 } Break;
 
 static struct {
@@ -45,6 +55,16 @@ static struct {
     int my_ckind, their_ckind;
     u32 seed;
     Break brk;
+    u8 hello_msg[3], match_msg[7];
+    /* The last break's reveal, for a peer still waiting on it. */
+    int prev_n;
+    bool prev_revealed;
+    u8 prev_reveal[4 + SALT];
+    /* A commit for the next break that came early. */
+    bool early;
+    u32 early_sum;
+    u8 early_hash[HASH];
+    int polls;
     char status[64];
 } N;
 
@@ -147,15 +167,20 @@ const char* tactics_NetStatus(void)
 
 static void sendReveal(void)
 {
-    u8 m[4 + SALT];
+    u8* m = N.brk.reveal_msg;
 
     m[0] = 'R';
     m[1] = (u8) N.brk.n;
     m[2] = (u8) (N.brk.n >> 8);
     m[3] = (u8) N.brk.my_pick;
     memcpy(m + 4, N.brk.my_salt, SALT);
-    pc_link_send(m, sizeof m);
+    pc_link_send(m, sizeof N.brk.reveal_msg);
     N.brk.sent_reveal = true;
+}
+
+static int msgBreak(const u8* m)
+{
+    return m[1] | (m[2] << 8);
 }
 
 static void onMessage(const u8* m, int len)
@@ -171,6 +196,10 @@ static void onMessage(const u8* m, int len)
         }
         N.their_ckind = m[2];
         N.got_hello = true;
+        /* The guest is still waiting: its MATCH was lost. */
+        if (N.host && N.lobby_done) {
+            pc_link_send(N.match_msg, sizeof N.match_msg);
+        }
         return;
     case 'M':
         if (len < 7 || N.host) {
@@ -181,7 +210,29 @@ static void onMessage(const u8* m, int len)
         N.lobby_done = true;
         return;
     case 'C':
-        if (len < 7 + HASH || (m[1] | (m[2] << 8)) != N.brk.n) {
+        if (len < 7 + HASH) {
+            return;
+        }
+        /* The other side is a break behind: it still needs our reveal. */
+        if (msgBreak(m) == N.prev_n && N.prev_revealed) {
+            pc_link_send(N.prev_reveal, sizeof N.prev_reveal);
+            return;
+        }
+        /* A break ahead: keep it until we get there. */
+        if (msgBreak(m) == N.brk.n + 1) {
+            N.early = true;
+            N.early_sum = get32(m + 3);
+            memcpy(N.early_hash, m + 7, HASH);
+            return;
+        }
+        if (msgBreak(m) != N.brk.n) {
+            return;
+        }
+        /* A repeat means our reveal may have been lost. */
+        if (N.brk.got_commit) {
+            if (N.brk.sent_reveal) {
+                pc_link_send(N.brk.reveal_msg, sizeof N.brk.reveal_msg);
+            }
             return;
         }
         N.brk.got_commit = true;
@@ -191,7 +242,7 @@ static void onMessage(const u8* m, int len)
     case 'R': {
         u8 check[HASH];
 
-        if (len < 4 + SALT || (m[1] | (m[2] << 8)) != N.brk.n || !N.brk.got_commit) {
+        if (len < 4 + SALT || msgBreak(m) != N.brk.n || !N.brk.got_commit || N.brk.got_reveal) {
             return;
         }
         commitHash(check, N.brk.n, m[3], m + 4);
@@ -231,6 +282,18 @@ void tactics_NetPoll(void)
     if (N.brk.sent_commit && N.brk.got_commit && !N.brk.sent_reveal) {
         sendReveal();
     }
+    /* Anything still unanswered goes again. */
+    if (s == PC_LINK_OPEN && ++N.polls % RESEND_POLLS == 0) {
+        if (N.hello_sent && !N.lobby_done) {
+            pc_link_send(N.hello_msg, sizeof N.hello_msg);
+        }
+        if (N.brk.sent_commit && !N.brk.got_reveal) {
+            pc_link_send(N.brk.commit_msg, sizeof N.brk.commit_msg);
+            if (N.brk.sent_reveal) {
+                pc_link_send(N.brk.reveal_msg, sizeof N.brk.reveal_msg);
+            }
+        }
+    }
 }
 
 bool tactics_NetClosed(void)
@@ -245,10 +308,11 @@ bool tactics_NetLobby(int my_ckind, u32* seed, int* p1_ckind, int* p2_ckind)
         return false;
     }
     if (!N.hello_sent) {
-        u8 h[3] = { 'H', VERSION, (u8) my_ckind };
-
+        N.hello_msg[0] = 'H';
+        N.hello_msg[1] = VERSION;
+        N.hello_msg[2] = (u8) my_ckind;
         N.my_ckind = my_ckind;
-        pc_link_send(h, sizeof h);
+        pc_link_send(N.hello_msg, sizeof N.hello_msg);
         N.hello_sent = true;
         setStatus(N.host ? "Connected. Waiting for the other player"
                          : "Connected. Waiting for the host");
@@ -257,7 +321,7 @@ bool tactics_NetLobby(int my_ckind, u32* seed, int* p1_ckind, int* p2_ckind)
     /* The host starts the match once both sides are ready, whichever was
      * ready first. */
     if (N.host && N.got_hello && !N.lobby_done) {
-        u8 r[7];
+        u8* r = N.match_msg;
 
         if (!pc_link_random(&N.seed, sizeof N.seed)) {
             setStatus("No secure random source for the seed");
@@ -267,7 +331,7 @@ bool tactics_NetLobby(int my_ckind, u32* seed, int* p1_ckind, int* p2_ckind)
         put32(r + 1, N.seed);
         r[5] = (u8) N.my_ckind;
         r[6] = (u8) N.their_ckind;
-        pc_link_send(r, sizeof r);
+        pc_link_send(r, sizeof N.match_msg);
         N.lobby_done = true;
     }
     if (!N.lobby_done) {
@@ -282,15 +346,24 @@ bool tactics_NetLobby(int my_ckind, u32* seed, int* p1_ckind, int* p2_ckind)
 
 void tactics_NetBreak(int n)
 {
+    N.prev_n = N.brk.n;
+    N.prev_revealed = N.brk.sent_reveal;
+    memcpy(N.prev_reveal, N.brk.reveal_msg, sizeof N.prev_reveal);
     memset(&N.brk, 0, sizeof N.brk);
     N.brk.n = n;
     N.brk.my_pick = -1;
     N.brk.their_pick = -1;
+    if (N.early && n == N.prev_n + 1) {
+        N.brk.got_commit = true;
+        N.brk.their_sum = N.early_sum;
+        memcpy(N.brk.their_hash, N.early_hash, HASH);
+    }
+    N.early = false;
 }
 
 void tactics_NetSendPick(int pick, u32 sum)
 {
-    u8 m[7 + HASH];
+    u8* m = N.brk.commit_msg;
     int wire = pick < 0 ? NONE_PICK : pick;
 
     if (N.brk.sent_commit) {
@@ -307,7 +380,7 @@ void tactics_NetSendPick(int pick, u32 sum)
     m[2] = (u8) (N.brk.n >> 8);
     put32(m + 3, sum);
     commitHash(m + 7, N.brk.n, wire, N.brk.my_salt);
-    pc_link_send(m, sizeof m);
+    pc_link_send(m, sizeof N.brk.commit_msg);
     N.brk.sent_commit = true;
     tactics_NetPoll();
 }

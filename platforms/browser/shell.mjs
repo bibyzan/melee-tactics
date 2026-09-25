@@ -247,7 +247,9 @@ async function begin() {
     if (!navigator.gpu) throw Error('This browser has no WebGPU. Try a current Chrome, Edge or Safari.');
     Module.discFile = disc;
     Module.readDisc = createDiscCache(disc).read;
-    Module.tacticsLink = createLinkManager({ iceServers: await iceServers(), log });
+    // ?relay=1 skips the direct connection and goes through the server.
+    Module.tacticsLink = createLinkManager({ iceServers: await iceServers(), log,
+                                            forceRelay: params.get('relay') === '1' });
     for (const dir of ['/saves', '/cache']) {
       Module.FS.mkdirTree(dir);
       Module.FS.mount(Module.FS.filesystems.IDBFS, { autoPersist: dir === '/saves' }, dir);
