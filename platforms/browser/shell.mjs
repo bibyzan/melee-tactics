@@ -265,7 +265,8 @@ async function begin() {
     Module.tacticsLink = link;
     // While a closed lobby waits for its friend, a real button to share the
     // link: a tap on it is the gesture the share sheet needs.
-    setInterval(() => { $('share-invite').hidden = !link.waitingForFriend(); }, 500);
+    // (On a touch screen the lobby's own Share row is that button.)
+    setInterval(() => { $('share-invite').hidden = touch || !link.waitingForFriend(); }, 500);
     $('share-invite').addEventListener('click', () => link.shareInvite());
     for (const dir of ['/saves', '/cache']) {
       Module.FS.mkdirTree(dir);
@@ -300,6 +301,7 @@ async function begin() {
       // The stock icons come off the disc in the background.
       const icons = stockIcons(disc).catch((error) => { log(`No stock icons: ${error.message}`); return null; });
       Module.onFighters = createFighterPicker({ stage: $('stage'), press, icons,
+        tapRow: (row) => Module._browser_menu_tap(row),
         pick: (slot, ckind) => Module._browser_pick_fighter(slot, ckind) });
     }
     status('');

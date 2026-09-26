@@ -70,6 +70,8 @@ static bool p2_cpu = true;
  * P2 by default. */
 static bool random_pick[2] = { false, true };
 static int fighter_tap_slot = -1, fighter_tap_ckind;
+/* A menu row tapped on the page, taken next frame as the cursor there and A. */
+static int menu_tap = -1;
 static int randomFighter(void);
 static int settle, plan_port, plan_frames, idle, since_plan;
 /* The launched port during a mid-air break, or -1 at a normal break. */
@@ -1228,7 +1230,7 @@ void tactics_DraftEnter(void* unused)
 void tactics_DraftExit(void* unused)
 {
     (void) unused;
-    pc_fighter_ui(0, -1, -1);
+    pc_fighter_ui(0, -1, -1, NULL, 0);
     mnOnlineLobby_Destroy();
 }
 
@@ -1293,17 +1295,32 @@ static void takeFighterTap(void)
     }
 }
 
-/* What the page's fighter grid shows for the screen: see pc_fighter_ui. */
-static void showFighterUi(void)
+/* What the page's fighter grid shows for the screen: see pc_fighter_ui.
+ * Online the grid covers the D-pad, so the screen's other rows (all but the
+ * fighter row) go with it as buttons. */
+static void showFighterUi(const OnlineLobbyView* view)
 {
+    const char* rows[ONLINE_LOBBY_MENU_ROWS];
+    int i, n = 0;
+
     if (screen == SCR_CPU) {
         pc_fighter_ui(1, random_pick[0] ? -1 : draft[0].ckind,
-                      random_pick[1] ? -1 : draft[1].ckind);
-    } else if (screen == SCR_ONLINE || (screen == SCR_LOBBY && !online_ready)) {
-        pc_fighter_ui(2, my_ckind, -1);
+                      random_pick[1] ? -1 : draft[1].ckind, NULL, 0);
+    } else if ((screen == SCR_ONLINE || (screen == SCR_LOBBY && !online_ready)) &&
+               view->title != NULL)
+    {
+        for (i = 1; i < view->menu_count && i < ONLINE_LOBBY_MENU_ROWS; i++) {
+            rows[n++] = view->menu[i];
+        }
+        pc_fighter_ui(2, my_ckind, -1, rows, n);
     } else {
-        pc_fighter_ui(0, -1, -1);
+        pc_fighter_ui(0, -1, -1, NULL, 0);
     }
+}
+
+void tactics_MenuTap(int row)
+{
+    menu_tap = row;
 }
 
 static void cycleMine(int delta)
@@ -1635,6 +1652,11 @@ void tactics_DraftFrame(void)
     screen_frames++;
     view.screen = LOBBY_SCREEN_MENU;
     takeFighterTap();
+    if (menu_tap >= 0) {
+        cursor = menu_tap;
+        keys |= PAD_CONFIRM;
+        menu_tap = -1;
+    }
     /* An invite link, once the menus are up and not mid-match. */
     if ((screen == SCR_MAIN || screen == SCR_ONLINE) && screen_frames > 10 && scripted() == NULL) {
         takeInvite();
@@ -1656,7 +1678,7 @@ void tactics_DraftFrame(void)
         lobbyMenu(keys, &view);
         break;
     }
-    showFighterUi();
+    showFighterUi(&view);
     if (view.title == NULL) {
         return; /* the screen changed or the scene is leaving */
     }

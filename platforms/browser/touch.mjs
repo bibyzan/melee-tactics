@@ -105,6 +105,17 @@ export function wantsTouch(params) {
   return matchMedia('(pointer: coarse)').matches;
 }
 
+// A stripe colour for each kind of pick, so the rock-paper-scissors reads at
+// a glance: the part of the label before ':' or '>'.
+const INTENT_COLOURS = {
+  Attack: '#e0503a', Smash: '#ff7a1a', 'Dash in': '#e0503a', 'Anti-air': '#f0a030',
+  Grab: '#a060e0', Shield: '#40a0f0', 'Jump in': '#40c070', 'Back off': '#9a9ab4', Zone: '#f0d040',
+  'Air Dodge': '#40a0f0', 'Jump Away': '#9a9ab4', 'Drift Away': '#9a9ab4', 'Fight back': '#e0503a',
+  Juggle: '#40c070', Cover: '#f0a030', Wait: '#6a6a80',
+  'Stand Up': '#9a9ab4', 'Roll In': '#40c070', 'Roll Away': '#9a9ab4', 'Get-up Attack': '#e0503a',
+  'Stay Down': '#6a6a80',
+};
+
 // The pick list as big buttons in the space the game leaves (plan_web.c
 // mirrors it here), over the on-screen controls while a break waits for this
 // player: below the game in portrait, split across the two side bands in
@@ -123,7 +134,12 @@ export function createPlanOverlay({ stage, pick }) {
   function row(label, index, cursor) {
     const button = document.createElement('button');
     button.className = index === cursor ? 'plan-row current' : 'plan-row';
-    button.textContent = label;
+    // The intent ("Attack: Down Tilt", "Shield > Grab") sets the stripe colour.
+    const intent = (label.split(/[:>]/)[0] || '').trim();
+    button.style.setProperty('--tint', INTENT_COLOURS[intent] || '#8a8aa0');
+    const [lead, rest] = label.includes(':') ? label.split(/:\s*/, 2) : [null, label];
+    if (lead) button.append(Object.assign(document.createElement('small'), { textContent: lead }));
+    button.append(Object.assign(document.createElement('span'), { textContent: rest }));
     button.addEventListener('pointerdown', (event) => {
       event.preventDefault();
       if (navigator.vibrate) navigator.vibrate(10);
@@ -191,7 +207,7 @@ const ROSTER = [
 // on the other with Back and Fight; online, only the player's own, beside the
 // usual controls. A tap chooses at once; -1 is Random. icons, when it
 // resolves, is each fighter's stock icon from the disc (icons.mjs).
-export function createFighterPicker({ stage, pick, press, icons }) {
+export function createFighterPicker({ stage, pick, press, tapRow, icons }) {
   const sides = ['left', 'right'].map((side) => {
     const el = document.createElement('div');
     el.className = `picker picker-${side}`;
@@ -235,6 +251,22 @@ export function createFighterPicker({ stage, pick, press, icons }) {
     return el;
   }
 
+  // A menu row as a button. A click, not a pointerdown: sharing an invite
+  // needs the tap to count as the user's gesture.
+  function rowButton(label, row) {
+    const el = document.createElement('button');
+    el.className = /share|ready|create/i.test(label) ? 'picker-action fight' : 'picker-action back';
+    // The game's rows are in capitals; buttons read better in sentence case.
+    el.textContent = label === label.toUpperCase() ? label.charAt(0) + label.slice(1).toLowerCase() : label;
+    el.addEventListener('pointerdown', (event) => ripple(el, event));
+    el.addEventListener('click', (event) => {
+      event.preventDefault();
+      if (navigator.vibrate) navigator.vibrate(12);
+      tapRow(row);
+    });
+    return el;
+  }
+
   function action(label, cls, bits) {
     const el = document.createElement('button');
     el.className = `picker-action ${cls}`;
@@ -257,8 +289,8 @@ export function createFighterPicker({ stage, pick, press, icons }) {
   });
 
   return show;
-  function show(mode, p1, p2) {
-    last = [mode, p1, p2];
+  function show(mode, p1, p2, rows = []) {
+    last = [mode, p1, p2, rows];
     const [left, right] = sides;
     left.hidden = right.hidden = mode === 0;
     stage.classList.toggle('picking', mode !== 0);
@@ -266,8 +298,14 @@ export function createFighterPicker({ stage, pick, press, icons }) {
       left.replaceChildren(head('P1', nameOf(p1)), grid(0, p1, true), action('Back', 'back', PAD.b));
       right.replaceChildren(head('P2', nameOf(p2)), grid(1, p2, true), action('Fight!', 'fight', PAD.start));
     } else if (mode === 2) {
+      // The grid covers the D-pad here, so the screen's other rows go on the
+      // other side as buttons (menu row i + 1 each), with Back.
+      const buttons = document.createElement('div');
+      buttons.className = 'picker-rows';
+      rows.forEach((label, i) => buttons.append(rowButton(label, i + 1)));
+      buttons.append(action('Back', 'back', PAD.b));
       left.replaceChildren(head('You', nameOf(p1)), grid(0, p1, true));
-      right.hidden = true;
+      right.replaceChildren(head('Online', ''), buttons);
     }
   }
 }

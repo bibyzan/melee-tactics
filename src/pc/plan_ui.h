@@ -20,8 +20,11 @@ bool pc_plan_ui(bool visible, const char* title, const char* sub, const char* co
 /* The fighter menus, mirrored the same way as a grid of fighters to tap.
  * mode: 0 none, 1 both P1 and P2 (against the CPU), 2 the player's own only
  * (online). p1 and p2 are the chosen character kinds, -1 for random. A tap
- * comes back through tactics_FighterTap. Native builds ignore it. */
-void pc_fighter_ui(int mode, int p1, int p2);
+ * comes back through tactics_FighterTap. rows are the screen's other menu
+ * rows, shown as buttons since the grid covers the D-pad: a tap on rows[i]
+ * comes back as tactics_MenuTap(i + 1), menu row i + 1 chosen with A.
+ * Native builds ignore it. */
+void pc_fighter_ui(int mode, int p1, int p2, const char* const* rows, int count);
 
 #ifdef __cplusplus
 }

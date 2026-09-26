@@ -164,6 +164,9 @@
   .picker-action.fight { background: linear-gradient(#ffd866, #e0a820); color: #1a1406; box-shadow: 0 3px 0 #8a6410; }
   .picker-action.back { background: #2c2c3a; color: #ccc; box-shadow: 0 3px 0 #1a1a22; }
   .picker-action:active { transform: translateY(2px); box-shadow: none; }
+  .picker-rows { flex: 1; min-height: 0; display: flex; flex-direction: column; justify-content: center; gap: 10px; }
+  .picker-rows .picker-action { height: auto; min-height: clamp(38px, 10vmin, 56px); padding: 6px 8px;
+                                font-size: clamp(12px, 3.2vmin, 18px); line-height: 1.15; }
 
   /* The tappable pick list, in the space the game leaves: over the controls,
      below the game in portrait, split across the side bands in landscape. */
@@ -181,12 +184,26 @@
   }
   .plan-head { color: #ddd; font-size: clamp(11px, 2.6vmin, 16px); line-height: 1.25; }
   .plan-head b { color: #f0c850; }
-  .plan-row { position: relative; overflow: hidden; flex: 1; min-height: 0; max-height: 72px; border: 0;
-              border-radius: 8px; background: #22222e; transition: transform 60ms;
+  /* A pick: raised on a lip like the pad's buttons, with its intent's colour
+     down the side; a tap sinks it and lights it up gold. */
+  .plan-row { --tint: #8a8aa0; position: relative; overflow: hidden; flex: 1; min-height: 0; max-height: 72px;
+              margin-bottom: 4px; border: 0; border-radius: 10px; padding: 0 12px 0 16px;
+              display: flex; flex-direction: column; justify-content: center; align-items: flex-start; gap: 1px;
+              background: linear-gradient(90deg, var(--tint) 0 6px, transparent 6px),
+                          linear-gradient(#34344a, #26263a);
+              box-shadow: 0 4px 0 #14141c, 0 5px 10px #0007, inset 0 1px 0 #ffffff1c;
               color: #e8e8f0; font: 700 clamp(12px, 3.4vmin, 20px) system-ui, sans-serif; text-align: left;
-              padding: 0 12px; overflow: hidden; touch-action: none; -webkit-tap-highlight-color: transparent; }
-  .plan-row.current { background: #34344a; box-shadow: inset 3px 0 0 #e0b030; }
-  .plan-row.chosen { background: #e0b030; color: #111; }
+              transition: transform 60ms ease-out, box-shadow 60ms ease-out;
+              touch-action: none; -webkit-tap-highlight-color: transparent; }
+  .plan-row small { color: var(--tint); font-size: 0.62em; font-weight: 800; letter-spacing: 0.08em;
+                    text-transform: uppercase; }
+  .plan-row span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+  .plan-row.current { box-shadow: 0 4px 0 #14141c, 0 5px 10px #0007, inset 0 0 0 2px #e0b03088; }
+  .plan-row:active, .plan-row.chosen { transform: translateY(4px);
+                                       box-shadow: 0 0 0 #14141c, 0 0 16px #e0b03066, inset 0 2px 6px #0006; }
+  .plan-row.chosen { background: linear-gradient(90deg, var(--tint) 0 6px, transparent 6px),
+                                 linear-gradient(#ffd866, #e0a820); color: #1a1406; }
+  .plan-row.chosen small { color: #5a4208; }
   #status { color: #fc6; text-align: center; padding: 4px 16px; }
   #status:empty { display: none; }
   body.touch.playing #status { position: fixed; top: 0; left: 0; right: 0; background: #000c; }

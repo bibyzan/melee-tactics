@@ -222,6 +222,8 @@ void tactics_PlanTap(int index);
 /// A fighter tapped on the page's grid: slot 0 or 1, character kind or -1
 /// for random (pc_fighter_ui).
 void tactics_FighterTap(int slot, int ckind);
+/// A menu row tapped on the page (pc_fighter_ui): chosen as if with A.
+void tactics_MenuTap(int row);
 /// Advance the planning pause. Call once per sim tick, before GObj procs,
 /// and only while the game mode is GM_TACTICS.
 void tactics_MatchFrame(void);

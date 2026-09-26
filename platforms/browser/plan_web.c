@@ -49,29 +49,46 @@ EMSCRIPTEN_KEEPALIVE void browser_plan_pick(int index) {
     tactics_PlanTap(index);
 }
 
-/* The fighter menus as a tap grid (touch.mjs createFighterPicker). */
+/* The fighter menus as a tap grid (touch.mjs createFighterPicker), with the
+ * screen's other rows as buttons. */
 void tactics_FighterTap(int slot, int ckind);
+void tactics_MenuTap(int row);
 
 // clang-format off
-EM_JS(void, fighter_web_show, (int mode, int p1, int p2), {
-  if (Module.onFighters) Module.onFighters(mode, p1, p2);
+EM_JS(void, fighter_web_show, (int mode, int p1, int p2, const char* rows), {
+  const text = UTF8ToString(rows);
+  if (Module.onFighters) Module.onFighters(mode, p1, p2, text ? text.split('\x1f') : []);
 });
 // clang-format on
 
-void pc_fighter_ui(int mode, int p1, int p2) {
+void pc_fighter_ui(int mode, int p1, int p2, const char* const* rows, int count) {
     static int last[3] = { -2, -2, -2 };
+    static char last_rows[512];
+    char text[512];
+    size_t len = 0;
+    int i;
 
-    if (mode == last[0] && p1 == last[1] && p2 == last[2]) {
+    text[0] = '\0';
+    for (i = 0; i < count && len < sizeof text; i++) {
+        len += (size_t)snprintf(text + len, sizeof text - len, "%s%s", i > 0 ? "\x1f" : "", rows[i]);
+    }
+    if (mode == last[0] && p1 == last[1] && p2 == last[2] && strcmp(text, last_rows) == 0) {
         return;
     }
     last[0] = mode;
     last[1] = p1;
     last[2] = p2;
-    fighter_web_show(mode, p1, p2);
+    snprintf(last_rows, sizeof last_rows, "%s", text);
+    fighter_web_show(mode, p1, p2, text);
 }
 
 /* slot 0 or 1 (P1, P2 against the CPU; online, the player's own), and the
  * character kind, -1 for random. */
 EMSCRIPTEN_KEEPALIVE void browser_pick_fighter(int slot, int ckind) {
     tactics_FighterTap(slot, ckind);
+}
+
+/* A menu row's button: that row, chosen with A. */
+EMSCRIPTEN_KEEPALIVE void browser_menu_tap(int row) {
+    tactics_MenuTap(row);
 }
