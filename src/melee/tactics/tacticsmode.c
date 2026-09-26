@@ -68,6 +68,10 @@ static bool p2_cpu = true;
 static int settle, plan_port, plan_frames, idle, since_plan;
 /* The launched port during a mid-air break, or -1 at a normal break. */
 static int react_port = -1;
+/* After both lock in, what each side went for stays up this long while the
+ * exchange plays. */
+#define REVEAL_FRAMES 75
+static int reveal_frames;
 static char result[96];
 
 enum {
@@ -79,61 +83,52 @@ enum {
     LINE_COUNT
 };
 
-/* One row in the break menu. b == TM_NONE is a single move. */
+/* One row in the break menu: an intent, and the move that carries it out
+ * for this character from here. b == TM_NONE is a single move. */
 typedef struct Opt {
     u8 a, b;
+    u8 intent; ///< ::Intent
 } Opt;
 
-enum {
-    D_CLOSE = 1,
-    D_MID = 2,
-    D_FAR = 4,
-    V_LEVEL = 1,
-    V_ABOVE = 2,
-    V_BELOW = 4,
-    P_COMBO = 1,
-    P_KILL = 2,
+/* What a pick is going for. They counter each other like rock, paper,
+ * scissors: an attack beats a grab or a jump-in and loses to a shield or a
+ * back-off; a grab beats a shield; a shield beats an attack or a jump-in;
+ * a jump-in beats a back-off or a grab; a back-off whiff-punishes attacks
+ * and grabs. Where the fighters stand swaps some for the version that fits
+ * (a foe overhead gets an anti-air, a far one a projectile or a dash in, a
+ * foe at kill percent a smash). */
+typedef enum Intent {
+    IN_MOVE, ///< no intent name: the move says it all
+    IN_ATTACK,
+    IN_SMASH,
+    IN_DASH_IN,
+    IN_ANTI_AIR,
+    IN_GRAB,
+    IN_SHIELD,
+    IN_JUMP_IN,
+    IN_BACK_OFF,
+    IN_ZONE,
+    IN_DODGE,
+    IN_ESCAPE,
+    IN_FIGHT,
+    IN_JUGGLE,
+    IN_COVER,
+    IN_WAIT,
+    IN_READ,
+} Intent;
+
+static const char* const intent_names[] = {
+    [IN_MOVE] = NULL,         [IN_ATTACK] = "Attack",   [IN_SMASH] = "Smash",
+    [IN_DASH_IN] = "Dash in", [IN_ANTI_AIR] = "Anti-air", [IN_GRAB] = "Grab",
+    [IN_SHIELD] = "Shield",   [IN_JUMP_IN] = "Jump in", [IN_BACK_OFF] = "Back off",
+    [IN_ZONE] = "Zone",       [IN_DODGE] = "Dodge",     [IN_ESCAPE] = "Escape",
+    [IN_FIGHT] = "Fight back", [IN_JUGGLE] = "Juggle",  [IN_COVER] = "Cover",
+    [IN_WAIT] = "Wait",       [IN_READ] = "Wait",
 };
 
-typedef struct Recipe {
-    u8 a, b;
-    u8 air;
-    u8 dist;
-    u8 vert;
-    u8 pct;
-} Recipe;
-
-/* Preference order. The first recipes that match the freeze are the rows.
- * The run-in options (grab, aerial, dash attack, side B) sit near the top so
- * they survive the row cap next to the close-range combos. */
-static const Recipe recipes[] = {
-    { TM_DTILT, TM_UTILT, 0, D_CLOSE, V_LEVEL | V_ABOVE, P_COMBO },
-    { TM_UTHROW, TM_NONE, 0, D_CLOSE, V_LEVEL | V_ABOVE, P_COMBO },
-    { TM_NAIR, TM_FAIR, 0, D_CLOSE | D_MID, V_LEVEL, P_COMBO },
-    { TM_DASH_ATTACK, TM_FTILT, 0, D_MID | D_FAR, V_LEVEL, P_COMBO },
-    { TM_SIDE_B, TM_NONE, 0, D_MID | D_FAR, V_LEVEL, P_COMBO | P_KILL },
-    { TM_JAB, TM_FTILT, 0, D_CLOSE, V_LEVEL, P_COMBO },
-    { TM_FSMASH, TM_NONE, 0, D_CLOSE, V_LEVEL, P_KILL },
-    { TM_USMASH, TM_NONE, 0, D_CLOSE, V_LEVEL | V_ABOVE, P_KILL },
-    { TM_BTHROW, TM_NONE, 0, D_CLOSE, V_LEVEL, P_KILL },
-    { TM_FAIR, TM_NONE, 0, D_CLOSE | D_MID, V_LEVEL, P_COMBO | P_KILL },
-    { TM_DTILT, TM_UAIR, 0, D_CLOSE, V_LEVEL | V_ABOVE, P_COMBO },
-    { TM_UTILT, TM_UAIR, 0, D_CLOSE, V_LEVEL | V_ABOVE, P_COMBO },
-    { TM_BAIR, TM_NONE, 0, D_CLOSE | D_MID, V_LEVEL, P_KILL },
-    { TM_UAIR, TM_NONE, 0, D_CLOSE, V_ABOVE, P_COMBO | P_KILL },
-    { TM_DAIR, TM_NONE, 0, D_CLOSE, V_BELOW, P_COMBO | P_KILL },
-    { TM_DASH_ATTACK, TM_NONE, 0, D_MID | D_FAR, V_LEVEL, P_COMBO | P_KILL },
-    { TM_FTILT, TM_NONE, 0, D_CLOSE | D_MID, V_LEVEL, P_COMBO | P_KILL },
-    { TM_NEUTRAL_B, TM_NONE, 0, D_MID | D_FAR, V_LEVEL | V_ABOVE | V_BELOW, P_COMBO | P_KILL },
-    { TM_DOWN_B, TM_NONE, 0, D_CLOSE, V_LEVEL | V_BELOW, P_COMBO | P_KILL },
-    { TM_NAIR, TM_NONE, 1, D_CLOSE | D_MID, V_LEVEL | V_ABOVE | V_BELOW, P_COMBO | P_KILL },
-    { TM_NAIR, TM_FAIR, 1, D_CLOSE | D_MID, V_LEVEL, P_COMBO },
-    { TM_FAIR, TM_NONE, 1, D_CLOSE | D_MID, V_LEVEL, P_COMBO | P_KILL },
-    { TM_BAIR, TM_NONE, 1, D_CLOSE | D_MID, V_LEVEL, P_KILL },
-    { TM_UAIR, TM_NONE, 1, D_CLOSE | D_MID, V_ABOVE, P_COMBO | P_KILL },
-    { TM_DAIR, TM_NONE, 1, D_CLOSE | D_MID, V_BELOW | V_LEVEL, P_COMBO | P_KILL },
-    { TM_NEUTRAL_B, TM_NONE, 1, D_MID | D_FAR, V_LEVEL, P_COMBO | P_KILL },
-};
+/* Foe damage from which the neutral attack is a smash and the grab a kill
+ * throw. */
+#define KILL_PERCENT 90.0f
 
 static Opt opts[2][OPT_CAP];
 static int opt_n[2];
@@ -144,7 +139,7 @@ static bool choosing[2];
 
 typedef struct PlanLine {
     int entry;
-    char text[64];
+    char text[96];
 } PlanLine;
 
 static HSD_Text* plan_text;
@@ -171,137 +166,244 @@ static const char* moveName(int ckind, int move)
 
 static void optionLabel(char* buf, size_t n, int ckind, const Opt* opt)
 {
+    const char* intent = intent_names[opt->intent];
+
     if (opt->a == TM_NONE) {
-        snprintf(buf, n, "Wait");
+        snprintf(buf, n, opt->intent == IN_WAIT   ? "Wait: Read the landing"
+                         : opt->intent == IN_READ ? "Wait: Read the get-up"
+                                                  : "Wait");
         return;
     }
-    if (opt->b == TM_NONE) {
+    /* Grabs, shield, back off and the escapes are named for what they do. */
+    if (intent == NULL || opt->intent == IN_GRAB || opt->intent == IN_SHIELD ||
+        opt->intent == IN_BACK_OFF || opt->intent == IN_ESCAPE || opt->intent == IN_DODGE)
+    {
         snprintf(buf, n, "%s", moveName(ckind, opt->a));
         return;
     }
-    snprintf(buf, n, "%s > %s", moveName(ckind, opt->a), moveName(ckind, opt->b));
+    snprintf(buf, n, "%s: %s", intent, moveName(ckind, opt->a));
 }
 
-static bool sameOpt(const Opt* a, const Opt* b)
+/* The short name the reveal shows for a pick. */
+static const char* intentWord(int ckind, const Opt* opt)
 {
-    return a->a == b->a && a->b == b->b;
+    if (opt->a == TM_NONE) {
+        return "Wait";
+    }
+    if (opt->a == TM_SHIELD) {
+        return "Shield";
+    }
+    if (opt->a == TM_BACKOFF) {
+        return "Back off";
+    }
+    return intent_names[opt->intent] != NULL ? intent_names[opt->intent]
+                                              : moveName(ckind, opt->a);
 }
 
 static Fighter* portFighter(int which);
 
+/* Adds a row unless the character lacks the move or it is already there. */
+static int addOpt(int ckind, Opt* out, int n, int cap, int move, int intent)
+{
+    int k;
+
+    if (n >= cap || (move != TM_NONE && !tactics_MoveAllowed(ckind, move))) {
+        return n;
+    }
+    for (k = 0; k < n; k++) {
+        if (out[k].a == move) {
+            return n;
+        }
+    }
+    out[n].a = (u8) move;
+    out[n].b = TM_NONE;
+    out[n].intent = (u8) intent;
+    return n + 1;
+}
+
+/* The move reaches a foe dx away once the run-in closes the gap a little. */
+static bool reaches(int ckind, int move, float dx)
+{
+    const TacticsMoveInfo* info = tactics_GetMove(ckind, move);
+    float d = dx > 8.0f ? dx - 8.0f : 0.0f;
+
+    return info != NULL && tactics_MoveAllowed(ckind, move) && info->ground.x0 <= d &&
+           d <= info->ground.x1;
+}
+
+/* Of the moves that reach, the one that comes out first by the character's
+ * own frame data; TM_NONE when none reaches. */
+static int fastest(Fighter* self, int ckind, const u8* moves, int count, float dx)
+{
+    int best = TM_NONE;
+    int best_frames = 999;
+    int i;
+
+    for (i = 0; i < count; i++) {
+        int frames;
+
+        if (!reaches(ckind, moves[i], dx)) {
+            continue;
+        }
+        frames = tactics_AiFrames(self->kind, moves[i], false);
+        if (frames < 0) {
+            frames = tactics_GetMove(ckind, moves[i])->startup;
+        }
+        if (frames < best_frames) {
+            best = moves[i];
+            best_frames = frames;
+        }
+    }
+    return best;
+}
+
+/* The aerial that fits where the foe is: overhead, below, in front, behind. */
+static int aerialFor(Fighter* self, float dx, float dy)
+{
+    if (dy > 18.0f) {
+        return TM_UAIR;
+    }
+    if (dy < -18.0f && self->ground_or_air == GA_Air) {
+        return TM_DAIR;
+    }
+    if (fabsf(dx) < 12.0f) {
+        return TM_NAIR;
+    }
+    return dx * self->facing_dir >= 0.0f || self->ground_or_air != GA_Air ? TM_FAIR : TM_BAIR;
+}
+
+/* Neutral: one row per intent, each carried out the way that fits. */
 static int buildOptions(int which, Opt* out, int cap)
+{
+    static const u8 pokes[] = { TM_JAB, TM_FTILT, TM_DTILT, TM_SIDE_B, TM_DASH_ATTACK };
+    static const u8 smashes[] = { TM_FSMASH, TM_DSMASH, TM_USMASH };
+    Fighter* self = portFighter(which);
+    Fighter* foe = portFighter(which ^ 1);
+    int ckind = draft[which].ckind;
+    int n = 0;
+    int move, proj;
+    bool kill, above, far;
+    float dx, dy, sdx;
+
+    if (self == NULL || foe == NULL) {
+        return addOpt(ckind, out, 0, cap, TM_FTILT, IN_ATTACK);
+    }
+    sdx = foe->cur_pos.x - self->cur_pos.x;
+    dx = fabsf(sdx);
+    dy = foe->cur_pos.y - self->cur_pos.y;
+    kill = foe->dmg.x1830_percent >= KILL_PERCENT;
+    above = dy > 14.0f && foe->ground_or_air == GA_Air;
+    far = dx > 55.0f;
+
+    if (tactics_Downed(self)) {
+        /* Lying down: only ways up. Each beats one read of the get-up. */
+        n = addOpt(ckind, out, n, cap, TM_GETUP, IN_MOVE);
+        n = addOpt(ckind, out, n, cap, TM_ROLL_IN, IN_MOVE);
+        n = addOpt(ckind, out, n, cap, TM_ROLL_AWAY, IN_MOVE);
+        n = addOpt(ckind, out, n, cap, TM_GETUP_ATTACK, IN_MOVE);
+        n = addOpt(ckind, out, n, cap, TM_STAY_DOWN, IN_MOVE);
+        return n;
+    }
+    if (tactics_Downed(foe) && self->ground_or_air != GA_Air) {
+        /* The foe is down: read the get-up. A poke or a down smash covers
+         * standing in place and the rolls, a shield the get-up attack. */
+        move = fastest(self, ckind, pokes, 4, dx);
+        n = addOpt(ckind, out, n, cap, move != TM_NONE ? move : TM_DASH_ATTACK,
+                   move != TM_NONE ? IN_ATTACK : IN_DASH_IN);
+        n = addOpt(ckind, out, n, cap, TM_DSMASH, IN_SMASH);
+        n = addOpt(ckind, out, n, cap, TM_SHIELD, IN_SHIELD);
+        n = addOpt(ckind, out, n, cap, TM_BACKOFF, IN_BACK_OFF);
+        n = addOpt(ckind, out, n, cap, TM_NONE, IN_READ);
+        return n;
+    }
+    if (self->ground_or_air == GA_Air) {
+        /* Both already off the ground: swing, drift out, or dodge. */
+        move = aerialFor(self, sdx, dy);
+        n = addOpt(ckind, out, n, cap, move, IN_ATTACK);
+        n = addOpt(ckind, out, n, cap, move == TM_NAIR ? TM_FAIR : TM_NAIR, IN_ATTACK);
+        n = addOpt(ckind, out, n, cap, TM_DRIFT, IN_BACK_OFF);
+        n = addOpt(ckind, out, n, cap, TM_AIRDODGE, IN_DODGE);
+        return n;
+    }
+
+    /* Attack: a smash at kill percent, else the quickest poke that reaches,
+     * else a dash attack from range. */
+    move = kill ? fastest(self, ckind, smashes, 3, dx) : TM_NONE;
+    if (move != TM_NONE) {
+        n = addOpt(ckind, out, n, cap, move, IN_SMASH);
+    } else if ((move = fastest(self, ckind, pokes, 5, dx)) != TM_NONE) {
+        n = addOpt(ckind, out, n, cap, move, IN_ATTACK);
+    } else {
+        n = addOpt(ckind, out, n, cap, TM_DASH_ATTACK, IN_DASH_IN);
+    }
+    /* Grab, or an anti-air when the foe is overhead and cannot be grabbed. */
+    if (above) {
+        n = addOpt(ckind, out, n, cap, kill ? TM_USMASH : TM_UTILT, IN_ANTI_AIR);
+    } else {
+        n = addOpt(ckind, out, n, cap, kill ? TM_BTHROW : TM_UTHROW, IN_GRAB);
+    }
+    n = addOpt(ckind, out, n, cap, TM_SHIELD, IN_SHIELD);
+    n = addOpt(ckind, out, n, cap, aerialFor(self, sdx, dy), IN_JUMP_IN);
+    /* Back off, or from range a projectile for those who have one. */
+    proj = tactics_Projectile(ckind);
+    if (far && proj != TM_NONE) {
+        n = addOpt(ckind, out, n, cap, proj, IN_ZONE);
+    } else {
+        n = addOpt(ckind, out, n, cap, TM_BACKOFF, IN_BACK_OFF);
+    }
+    return n;
+}
+
+/* The launched fighter as the chaser closes in: get away, or fight back
+ * with the aerial that faces the chaser. */
+static int buildReactOptions(int which, Opt* out, int cap)
 {
     Fighter* self = portFighter(which);
     Fighter* foe = portFighter(which ^ 1);
     int ckind = draft[which].ckind;
-    int air, dist, vert, pct;
     int n = 0;
-    int i;
+
+    n = addOpt(ckind, out, n, cap, TM_AIRDODGE, IN_DODGE);
+    if (self == NULL || self->x1968_jumpsUsed < self->co_attrs.max_jumps) {
+        n = addOpt(ckind, out, n, cap, TM_JUMP, IN_ESCAPE);
+    }
+    n = addOpt(ckind, out, n, cap, TM_DRIFT, IN_ESCAPE);
+    if (self != NULL && foe != NULL) {
+        float dx = foe->cur_pos.x - self->cur_pos.x;
+        float dy = foe->cur_pos.y - self->cur_pos.y;
+
+        n = addOpt(ckind, out, n, cap, aerialFor(self, dx, dy), IN_FIGHT);
+    } else {
+        n = addOpt(ckind, out, n, cap, TM_NAIR, IN_FIGHT);
+    }
+    return n;
+}
+
+/* The chaser about to reach a launched foe: the juggle that fits, a
+ * different swing to cover a dodge, an anti-air from below, or wait to
+ * read the landing. */
+static int buildChaseOptions(int which, Opt* out, int cap)
+{
+    Fighter* self = portFighter(which);
+    Fighter* foe = portFighter(which ^ 1);
+    int ckind = draft[which].ckind;
+    int n = 0;
+    int move;
     float dx, dy;
 
     if (self == NULL || foe == NULL) {
-        out[0].a = TM_FTILT;
-        out[0].b = TM_NONE;
-        return 1;
+        n = addOpt(ckind, out, n, cap, TM_UAIR, IN_JUGGLE);
+        return addOpt(ckind, out, n, cap, TM_NONE, IN_WAIT);
     }
-    dx = fabsf(foe->cur_pos.x - self->cur_pos.x);
+    dx = foe->cur_pos.x - self->cur_pos.x;
     dy = foe->cur_pos.y - self->cur_pos.y;
-    air = self->ground_or_air == GA_Air;
-    /* The fighters are running at each other, so mid range soon is close. */
-    dist = dx < 20.0f ? D_CLOSE : dx < 48.0f ? D_CLOSE | D_MID : D_FAR;
-    vert = dy > 14.0f ? V_ABOVE : dy < -14.0f ? V_BELOW : V_LEVEL;
-    pct = foe->dmg.x1830_percent >= 80.0f ? P_KILL : P_COMBO;
-    for (i = 0; i < (int) (sizeof(recipes) / sizeof(recipes[0])) && n < cap; i++) {
-        const Recipe* r = &recipes[i];
-        Opt opt;
-        int k;
-        bool dup = false;
-
-        if ((r->air != 0) != (air != 0)) {
-            continue;
-        }
-        if ((r->dist & dist) == 0 || (r->vert & vert) == 0 || (r->pct & pct) == 0) {
-            continue;
-        }
-        if (!tactics_MoveAllowed(ckind, r->a)) {
-            continue;
-        }
-        if (r->b != TM_NONE && !tactics_MoveAllowed(ckind, r->b)) {
-            continue;
-        }
-        opt.a = r->a;
-        /* One move per pick: a break comes again right before the next
-         * contact, so a combo's second half is just the next pick. */
-        opt.b = TM_NONE;
-        for (k = 0; k < n; k++) {
-            if (sameOpt(&out[k], &opt)) {
-                dup = true;
-            }
-        }
-        if (!dup) {
-            out[n++] = opt;
-        }
+    move = aerialFor(self, dx, dy);
+    n = addOpt(ckind, out, n, cap, move, IN_JUGGLE);
+    n = addOpt(ckind, out, n, cap, move == TM_NAIR ? TM_FAIR : TM_NAIR, IN_COVER);
+    if (self->ground_or_air != GA_Air && dy > 10.0f) {
+        n = addOpt(ckind, out, n, cap, TM_USMASH, IN_ANTI_AIR);
     }
-    if (n == 0) {
-        out[0].a = air ? TM_NAIR : TM_FTILT;
-        out[0].b = TM_NONE;
-        n = 1;
-    }
-    return n;
-}
-
-static int addOpts(int ckind, const Opt* list, int count, Opt* out, int n, int cap)
-{
-    int i;
-
-    for (i = 0; i < count && n < cap; i++) {
-        const Opt* o = &list[i];
-
-        if (o->a == TM_NONE ||
-            (tactics_MoveAllowed(ckind, o->a) &&
-             (o->b == TM_NONE || tactics_MoveAllowed(ckind, o->b))))
-        {
-            out[n++] = *o;
-        }
-    }
-    return n;
-}
-
-/* The launched fighter as the chaser closes in: get away, or swing. */
-static int buildReactOptions(int which, Opt* out, int cap)
-{
-    static const Opt react[] = {
-        { TM_AIRDODGE, TM_NONE }, { TM_JUMP, TM_NONE }, { TM_NAIR, TM_NONE },
-        { TM_FAIR, TM_NONE },     { TM_DAIR, TM_NONE }, { TM_BAIR, TM_NONE },
-    };
-    Fighter* self = portFighter(which);
-    int ckind = draft[which].ckind;
-
-    /* Out of midair jumps, jumping away is not a choice. */
-    if (self != NULL && self->x1968_jumpsUsed >= self->co_attrs.max_jumps) {
-        return addOpts(ckind, react + 2, 4, out, addOpts(ckind, react, 1, out, 0, cap), cap);
-    }
-    return addOpts(ckind, react, 6, out, 0, cap);
-}
-
-/* The chaser about to reach a launched foe: a move, or wait for the read. */
-static int buildChaseOptions(int which, Opt* out, int cap)
-{
-    static const Opt ground[] = {
-        { TM_UAIR, TM_NONE },   { TM_NAIR, TM_NONE }, { TM_FAIR, TM_NONE },
-        { TM_USMASH, TM_NONE }, { TM_NONE, TM_NONE },
-    };
-    static const Opt air[] = {
-        { TM_UAIR, TM_NONE }, { TM_NAIR, TM_NONE }, { TM_FAIR, TM_NONE },
-        { TM_DAIR, TM_NONE }, { TM_NONE, TM_NONE },
-    };
-    Fighter* self = portFighter(which);
-    int ckind = draft[which].ckind;
-
-    if (self != NULL && self->ground_or_air == GA_Air) {
-        return addOpts(ckind, air, 5, out, 0, cap);
-    }
-    return addOpts(ckind, ground, 5, out, 0, cap);
+    return addOpt(ckind, out, n, cap, TM_NONE, IN_WAIT);
 }
 
 static Fighter* portFighter(int which)
@@ -346,12 +448,13 @@ static void drawPlanPanel(HSD_GObj* gobj, int pass)
     static GXColor rule = { 0xFF, 0xE0, 0x60, 0xA0 };
 
     (void) gobj;
-    if (pass != 2 || !planning) {
+    if (pass != 2 || (!planning && reveal_frames <= 0)) {
         return;
     }
     hsd_80391A04(1.0f, 1.0f, 1);
-    /* The host shows the list: just a banner along the bottom. */
-    if (plan_external) {
+    /* The host shows the list, or the picks are out: just a banner along the
+     * bottom. */
+    if (plan_external || !planning) {
         DrawRectangle(12.0f, -470.0f, 616.0f, 40.0f, &panel);
         return;
     }
@@ -548,6 +651,7 @@ static void closeFight(void)
     react_port = -1;
     settle = 0;
     destroyPlanUi();
+    reveal_frames = 0;
 }
 
 static void queueOption(int which, const Opt* opt)
@@ -569,10 +673,57 @@ static void queueOption(int which, const Opt* opt)
  * preferred ones. */
 static int cpuPick(int n)
 {
-    int a = (int) (tactics_SyncRand() % (u32) n);
-    int b = (int) (tactics_SyncRand() % (u32) n);
+    /* Every intent is a counter to another, so none is favoured. */
+    return (int) (tactics_SyncRand() % (u32) n);
+}
 
-    return a < b ? a : b;
+/* "P1 Fox: Grab   vs   P2 Marth: Shield" along the bottom as the exchange
+ * starts, so a read that won or lost is plain to see. */
+static void showReveal(void)
+{
+    char msg[96];
+    size_t len = 0;
+    int p;
+
+    msg[0] = '\0';
+    for (p = 0; p < 2; p++) {
+        int pick = opt_cursor[p];
+
+        if (!choosing[p] || opt_n[p] <= 0) {
+            continue;
+        }
+        if (pick < 0 || pick >= opt_n[p]) {
+            pick = 0;
+        }
+        len += (size_t) snprintf(msg + len, sizeof msg - len, "%sP%d %s: %s",
+                                 len > 0 ? "   vs   " : "", p + 1,
+                                 tactics_FighterName(draft[p].ckind),
+                                 intentWord(draft[p].ckind, &opts[p][pick]));
+        if (len >= sizeof msg) {
+            break;
+        }
+    }
+    if (msg[0] == '\0') {
+        return;
+    }
+    pc_log_line("tactics: reveal %s", msg);
+    ensurePlanUi();
+    if (!plan_ui) {
+        return;
+    }
+    setPlanLine(&plan_lines[LINE_BANNER], msg);
+    setPlanColor(&plan_lines[LINE_BANNER], &col_gold);
+    reveal_frames = REVEAL_FRAMES;
+}
+
+static void endReveal(void)
+{
+    if (reveal_frames > 0) {
+        reveal_frames = 0;
+        if (plan_ui) {
+            setPlanLine(&plan_lines[LINE_BANNER], "");
+        }
+    }
 }
 
 /* Only the choosers' queues change. A fighter left out of the break keeps
@@ -604,6 +755,7 @@ static void commitPlan(void)
     planning = false;
     react_port = -1;
     hidePlanText();
+    showReveal();
 }
 
 /* The next human chooser still to lock in, or -1. */
@@ -627,6 +779,7 @@ static void openPlan(int launched, const bool* picks)
     int p;
 
     react_port = launched;
+    endReveal();
     tapped = -1; /* a tap meant for the last break */
     for (p = 0; p < 2; p++) {
         choosing[p] = picks[p];
@@ -791,12 +944,18 @@ static void matchFrame(void)
             hidePlanText();
         }
         settle = 0;
+        endReveal();
         return;
     }
     if (!planning) {
         bool picks[2] = { false, false };
         int launched = tactics_AirBreak(picks);
 
+        if (reveal_frames == 1) {
+            endReveal();
+        } else if (reveal_frames > 1) {
+            reveal_frames--;
+        }
         /* A scripted run that stops making decisions is a bug: say where it
          * stuck and quit rather than leave a window sitting there. */
         if (auto_resume && ++since_plan >= SCRIPT_STALL_FRAMES) {

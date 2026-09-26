@@ -47,6 +47,13 @@ typedef enum TacticsMove {
     TM_AIRDODGE, ///< reactions: only offered to a launched fighter
     TM_JUMP,
     TM_DRIFT,
+    TM_SHIELD,  ///< neutral: shield, then grab out of it
+    TM_BACKOFF, ///< neutral: dash away, then punish a whiff
+    TM_GETUP,   ///< knocked down: only these are offered
+    TM_ROLL_IN,
+    TM_ROLL_AWAY,
+    TM_GETUP_ATTACK,
+    TM_STAY_DOWN,
     TM_COUNT,
     TM_NONE = 0xFF,
 } TacticsMove;
@@ -62,6 +69,9 @@ typedef enum TacticsInput {
     TI_DODGE,   ///< R in the air, stick away from the foe
     TI_JUMP,    ///< midair jump away from the foe
     TI_DRIFT,   ///< hold away from the foe until landing
+    TI_SHIELD,  ///< hold shield; grab out of it once hit or once the foe whiffs
+    TI_BACKOFF, ///< dash away; dash attack a whiff
+    TI_GETUP,   ///< from lying down: stand, roll, get-up attack or stay
 } TacticsInput;
 
 /// Which way the fighter must face for the move to connect.
@@ -102,6 +112,9 @@ const TacticsMoveInfo* tactics_GetMove(int ckind, int move);
 /// False for moves this character cannot sensibly draft (Zelda/Sheik's
 /// transform).
 bool tactics_MoveAllowed(int ckind, int move);
+/// The character's special that fires from range (neutral B first), or
+/// TM_NONE.
+int tactics_Projectile(int ckind);
 const char* tactics_FighterName(int ckind);
 
 /* tacticsbot.c */
@@ -122,6 +135,8 @@ int tactics_AirBreak(bool* picks);
 bool tactics_BreakInAction(void);
 /// Both fighters can act, neither has anything queued, and neither is moving.
 bool tactics_BothIdle(void);
+/// Lying on the ground after a missed tech, bounce or knockdown hit.
+bool tactics_Downed(Fighter* fp);
 /// True while a queued pick drives this fighter. Between picks Melee's own
 /// CPU AI drives it (see tactics_FilterAi).
 bool tactics_Controls(Fighter* fp);
@@ -142,6 +157,9 @@ bool tactics_AiKnows(Fighter* fp, int move);
 /// hit the target: the character's real frames to the hitbox and hitbox box,
 /// with both fighters' motion predicted to that frame.
 bool tactics_AiConnects(Fighter* fp, Fighter* target, int move);
+/// Frames from the input to the move's hitbox by the CPU table, or -1 when
+/// the table has no entry.
+int tactics_AiFrames(int kind, int move, bool air);
 
 /* tacticssync.c */
 /// Start a match. With on, the fight runs from seed so that another machine

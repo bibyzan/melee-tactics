@@ -177,6 +177,13 @@ bool tactics_AiKnows(Fighter* fp, int move)
     return findEntry(fp->kind, move, fp->ground_or_air == GA_Air) != NULL;
 }
 
+int tactics_AiFrames(int kind, int move, bool air)
+{
+    TacticsAiEntry* e = findEntry(kind, move, air);
+
+    return e != NULL ? e->frames : -1;
+}
+
 bool tactics_AiConnects(Fighter* fp, Fighter* target, int move)
 {
     bool air = fp->ground_or_air == GA_Air;

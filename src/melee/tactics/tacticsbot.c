@@ -32,6 +32,11 @@ typedef struct Brain {
 #define CHASE_LEAD 16
 #define CHASE_REACH 24.0f
 #define CHASE_HOP 22.0f
+/* An air pick needs this many frames of air left to come out at all: a
+ * reaction's startup, or a chaser's jump squat and swing. Closer to the
+ * ground the CPU handles the landing, with no pause. */
+#define REACT_AIR_FRAMES 18
+#define CHASE_AIR_FRAMES 12
 /* Frames an aerial keeps aiming, across hops, before its pick is dropped. */
 #define AIM_LIMIT 75
 /* Frames a queued move spends closing to its reach before it goes anyway. */
@@ -268,6 +273,17 @@ static bool still(Fighter* f)
     return fabsf(f->pos_delta.x) + fabsf(f->pos_delta.y) < 0.05f;
 }
 
+bool tactics_Downed(Fighter* fp)
+{
+    return inRange(fp->motion_id, ftCo_MS_DownBoundU, ftCo_MS_DownDamageU) ||
+           inRange(fp->motion_id, ftCo_MS_DownBoundD, ftCo_MS_DownDamageD);
+}
+
+static bool downWait(Fighter* f)
+{
+    return f->motion_id == ftCo_MS_DownWaitU || f->motion_id == ftCo_MS_DownWaitD;
+}
+
 bool tactics_BothIdle(void)
 {
     Fighter* fs[2];
@@ -325,6 +341,32 @@ static bool chaseArriving(Fighter* a, Fighter* v)
     return false;
 }
 
+/* Frames until a fighter lands on the stage, by its current drift; 99 for
+ * longer, or for a fall past the stage. */
+static int framesToLand(Fighter* f)
+{
+    float vy = f->pos_delta.y;
+    float x = f->cur_pos.x;
+    float y = f->cur_pos.y;
+    int t;
+
+    if (f->ground_or_air != GA_Air) {
+        return 0;
+    }
+    for (t = 1; t < 99; t++) {
+        vy -= f->co_attrs.gravity;
+        if (vy < -f->co_attrs.terminal_velocity) {
+            vy = -f->co_attrs.terminal_velocity;
+        }
+        y += vy;
+        x += f->pos_delta.x;
+        if (y <= 0.0f && fabsf(x) <= FD_EDGE) {
+            return t;
+        }
+    }
+    return 99;
+}
+
 int tactics_AirBreak(bool* picks)
 {
     Fighter* fs[2];
@@ -344,6 +386,7 @@ int tactics_AirBreak(bool* picks)
         Fighter* v = fs[p];
         Fighter* a = fs[p ^ 1];
         bool chaser_free, meet, react;
+        int air_left;
 
         /* A fresh hit starts a fresh launch. */
         if (!tumbling(v) || v->dmg.x195c_hitlag_frames > 0.0f) {
@@ -357,11 +400,14 @@ int tactics_AirBreak(bool* picks)
         /* A trade has no one free to follow up. */
         chaser_free = onStage(a) && !tumbling(a) && a->victim_gobj == NULL &&
                       a->dmg.x195c_hitlag_frames <= 0.0f && queueDone(p ^ 1) && actionable(a);
-        meet = !chase_seen[p] && chaser_free && chaseArriving(a, v);
+        air_left = framesToLand(v);
+        meet = !chase_seen[p] && chaser_free && air_left >= CHASE_AIR_FRAMES &&
+               chaseArriving(a, v);
         /* The launched fighter picks only once it can act, so its pick comes
          * out right away: when hitstun ends, or when the chaser arrives
-         * after that. */
-        react = actionable(v) && queueDone(p) && (ended[p] || meet);
+         * after that. With no time left before landing there is no pick. */
+        react = actionable(v) && queueDone(p) && air_left >= REACT_AIR_FRAMES &&
+                (ended[p] || meet);
         if (!meet && !react) {
             continue;
         }
@@ -382,7 +428,9 @@ static void pad(Fighter* f, int x, int y, unsigned buttons, int cx, int cy)
     f->cpu.cstick.x = cx;
     f->cpu.cstick.y = cy;
     f->cpu.buttons = buttons;
-    f->cpu.ltrigger = f->cpu.rtrigger = 0;
+    /* As the CPU's own PressR does: a shield reads the analog trigger. */
+    f->cpu.ltrigger = 0;
+    f->cpu.rtrigger = (buttons & HSD_PAD_R) ? 0xFF : 0;
 }
 
 static void beginMove(Fighter* f, Brain* b, int dir, int move, const TacticsMoveInfo* info,
@@ -430,6 +478,14 @@ static void beginMove(Fighter* f, Brain* b, int dir, int move, const TacticsMove
         break;
     case TI_DRIFT:
         pad(f, -dir * 127, 0, 0, 0, 0);
+        break;
+    case TI_SHIELD:
+        pad(f, 0, 0, HSD_PAD_R, 0, 0);
+        b->phase = 0;
+        break;
+    case TI_BACKOFF:
+        pad(f, -dir * 127, 0, 0, 0, 0);
+        b->phase = 0;
         break;
     default:
         pad(f, move == TM_FTILT ? dir * 45 : 0,
@@ -518,6 +574,110 @@ static bool needsStop(int move, const TacticsMoveInfo* info)
            (info->input == TI_SPECIAL && move != TM_SIDE_B);
 }
 
+/* The foe is swinging or grabbing: what a shield waits for and a back-off
+ * punishes. */
+static bool foeSwinging(Fighter* enemy)
+{
+    return inRange(enemy->motion_id, ftCo_MS_Attack11, ftCo_MS_AttackAirLw) ||
+           inRange(enemy->motion_id, ftCo_MS_Catch, ftCo_MS_CatchDash) ||
+           enemy->motion_id >= ftCo_MS_Count;
+}
+
+/* Shield > Grab: hold shield. Once it takes a hit (the shield stun ends) or
+ * the foe swings close by, grab out of it. Nothing comes, it drops. */
+static void shieldThink(Fighter* f, Fighter* enemy, Brain* b, float dx)
+{
+    bool shielding = inRange(f->motion_id, ftCo_MS_GuardOn, ftCo_MS_GuardSetOff);
+
+    if (f->motion_id == ftCo_MS_GuardSetOff) {
+        b->phase = 1;
+    }
+    /* The shield waits for the foe to arrive, then half a second more; a
+     * foe still in the air is still coming. */
+    if (fabsf(dx) < 40.0f && enemy->ground_or_air != GA_Air) {
+        b->approach++;
+    }
+    if ((b->approach > 40 || b->age > 120) && b->phase == 0) {
+        pc_log_line("tactics: P%d shield dropped (nothing came)", f->player_id + 1);
+        b->saw_attack = true;
+        return;
+    }
+    if (shielding && f->motion_id != ftCo_MS_GuardSetOff && b->age > 3 &&
+        (b->phase == 1 || (foeSwinging(enemy) && fabsf(dx) < 26.0f)))
+    {
+        pad(f, 0, 0, HSD_PAD_R | HSD_PAD_A, 0, 0);
+        return;
+    }
+    pad(f, 0, 0, HSD_PAD_R, 0, 0);
+}
+
+/* Back off > Punish: dash away, wait for the foe to swing at the air, then
+ * dash attack into it. Nothing to punish, it ends. */
+static void backOffThink(Fighter* f, Fighter* enemy, Brain* b, float dx, int dir)
+{
+    if (b->phase == 0) {
+        if (b->age < 12 && f->ground_or_air == GA_Ground &&
+            f->cur_pos.x * -dir < FD_EDGE - 20.0f)
+        {
+            pad(f, -dir * 127, 0, 0, 0, 0);
+            return;
+        }
+        b->phase = 1;
+    }
+    if (b->phase == 1) {
+        if (b->age > 55) {
+            b->saw_attack = true;
+        } else if (foeSwinging(enemy) && fabsf(dx) < 55.0f &&
+                   f->ground_or_air == GA_Ground && actionable(f))
+        {
+            b->phase = 2;
+            b->age = 0;
+        }
+        return;
+    }
+    if (b->age < 3 && !running(f)) {
+        pad(f, dir * 127, 0, 0, 0, 0);
+        return;
+    }
+    pad(f, dir * 127, 0, HSD_PAD_A, 0, 0);
+    if (b->age > 20) {
+        b->saw_attack = true;
+    }
+}
+
+/* From lying down: press the way up. Staying down just waits a moment; the
+ * CPU gets up after that. */
+static void getUpThink(Fighter* f, Brain* b, int move, int dir)
+{
+    if (!b->executing) {
+        b->executing = true;
+        b->age = 0;
+        b->saw_attack = false;
+        b->connected = false;
+    }
+    b->age++;
+    switch (move) {
+    case TM_GETUP:
+        pad(f, 0, 127, 0, 0, 0);
+        break;
+    case TM_ROLL_IN:
+        pad(f, dir * 127, 0, 0, 0, 0);
+        break;
+    case TM_ROLL_AWAY:
+        pad(f, -dir * 127, 0, 0, 0, 0);
+        break;
+    case TM_GETUP_ATTACK:
+        pad(f, 0, 0, (b->age & 1) ? HSD_PAD_A : 0, 0, 0);
+        break;
+    default:
+        if (b->age > 40) {
+            b->executing = false;
+            b->slot++;
+        }
+        break;
+    }
+}
+
 void tactics_Think(Fighter_GObj* gobj)
 {
     Fighter* f = GET_FIGHTER(gobj);
@@ -545,6 +705,19 @@ void tactics_Think(Fighter_GObj* gobj)
     dx = enemy->cur_pos.x - f->cur_pos.x;
     dir = dx >= 0 ? 1 : -1;
     air = f->ground_or_air == GA_Air;
+    /* Lying down with a way up queued: that is the pick, not a reason to
+     * drop it. */
+    if (downWait(f) && !f->x221C_b6) {
+        int next = nextSlot(f->player_id);
+        const TacticsMoveInfo* up =
+            next < l->count ? tactics_GetMove(l->ckind, l->moves[next]) : NULL;
+
+        if (up != NULL && up->input == TI_GETUP) {
+            b->slot = next;
+            getUpThink(f, b, l->moves[next], dir);
+            return;
+        }
+    }
     /* Getting hit, the ledge, a knockdown, or the air past the stage end
      * the pick: whatever was left of it would only play late, and the CPU
      * handles all of those better. It takes over next frame. */
@@ -598,6 +771,15 @@ void tactics_Think(Fighter_GObj* gobj)
         case TI_DRIFT:
             b->saw_attack |= !air;
             break;
+        case TI_SHIELD:
+            b->saw_attack |= inRange(f->motion_id, ftCo_MS_Catch, ftCo_MS_ThrowLw);
+            break;
+        case TI_BACKOFF:
+            b->saw_attack |= f->motion_id == ftCo_MS_AttackDash;
+            break;
+        case TI_GETUP:
+            b->saw_attack |= !downWait(f);
+            break;
         default:
             b->saw_attack |= inRange(f->motion_id, ftCo_MS_Attack11, ftCo_MS_AttackAirLw) ||
                              inRange(f->motion_id, ftCo_MS_Catch, ftCo_MS_ThrowLw) ||
@@ -608,7 +790,7 @@ void tactics_Think(Fighter_GObj* gobj)
         b->connected |= b->saw_attack &&
                         (enemy->dmg.x195c_hitlag_frames > 0.0f || f->victim_gobj != NULL);
         if ((b->saw_attack && actionable(f)) || b->age > 150) {
-            if (info->input <= TI_THROW) {
+            if (info->input <= TI_THROW || info->input == TI_SHIELD || info->input == TI_BACKOFF) {
                 pc_log_line("tactics: P%d %s %s", f->player_id + 1, info->name,
                             b->connected ? "hit" : "missed");
             }
@@ -616,6 +798,18 @@ void tactics_Think(Fighter_GObj* gobj)
             b->slot++;
             b->aim = 0;
             b->cooldown = 1;
+            return;
+        }
+        if (info->input == TI_SHIELD && !b->saw_attack) {
+            shieldThink(f, enemy, b, dx);
+            return;
+        }
+        if (info->input == TI_BACKOFF && !b->saw_attack) {
+            backOffThink(f, enemy, b, dx, dir);
+            return;
+        }
+        if (info->input == TI_SHIELD && f->motion_id == ftCo_MS_CatchWait) {
+            pad(f, 0, 127, 0, 0, 0); /* up throw: safe, sets up the next read */
             return;
         }
         if (info->input == TI_THROW && f->motion_id == ftCo_MS_CatchWait) {

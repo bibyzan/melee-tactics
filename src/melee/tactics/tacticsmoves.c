@@ -62,6 +62,22 @@ static const TacticsMoveInfo moves[TM_COUNT] = {
                   NO_AIR, { 0, 999, -999, 999 } },
     [TM_DRIFT] = { "Drift Away", TI_DRIFT, TF_ANY, 0, { 0, 0, 0 },
                    NO_AIR, { 0, 999, -999, 999 } },
+    /* Neutral's defensive answers, grounded only; they react to the foe. */
+    [TM_SHIELD] = { "Shield > Grab", TI_SHIELD, TF_ANY, 0, { 0, 0, 0 },
+                    { 0, 999, -999, 999 }, NO_AIR },
+    [TM_BACKOFF] = { "Back off > Punish", TI_BACKOFF, TF_ANY, 0, { 0, 0, 0 },
+                     { 0, 999, -999, 999 }, NO_AIR },
+    /* Lying down, only a way up. */
+    [TM_GETUP] = { "Stand Up", TI_GETUP, TF_ANY, 0, { 0, 0, 0 }, { 0, 999, -999, 999 },
+                   NO_AIR },
+    [TM_ROLL_IN] = { "Roll In", TI_GETUP, TF_ANY, 0, { 0, 0, 0 }, { 0, 999, -999, 999 },
+                     NO_AIR },
+    [TM_ROLL_AWAY] = { "Roll Away", TI_GETUP, TF_ANY, 0, { 0, 0, 0 },
+                       { 0, 999, -999, 999 }, NO_AIR },
+    [TM_GETUP_ATTACK] = { "Get-up Attack", TI_GETUP, TF_ANY, 0, { 0, 0, 0 },
+                          { 0, 999, -999, 999 }, NO_AIR },
+    [TM_STAY_DOWN] = { "Stay Down", TI_GETUP, TF_ANY, 0, { 0, 0, 0 },
+                       { 0, 999, -999, 999 }, NO_AIR },
 };
 
 /// The shape of a special move, which sets its reach and draft weights.
@@ -216,6 +232,21 @@ bool tactics_MoveAllowed(int ckind, int move)
         return specials[ckind][move - TM_NEUTRAL_B].shape != SS_NONE;
     }
     return true;
+}
+
+int tactics_Projectile(int ckind)
+{
+    int i;
+
+    if (ckind < 0 || ckind >= CKind_Playable_Count) {
+        return TM_NONE;
+    }
+    for (i = 0; i < 2; i++) {
+        if (specials[ckind][i].shape == SS_PROJ) {
+            return TM_NEUTRAL_B + i;
+        }
+    }
+    return TM_NONE;
 }
 
 const char* tactics_FighterName(int ckind)
