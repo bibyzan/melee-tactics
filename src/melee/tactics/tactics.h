@@ -137,6 +137,13 @@ bool tactics_BreakInAction(void);
 bool tactics_BothIdle(void);
 /// Lying on the ground after a missed tech, bounce or knockdown hit.
 bool tactics_Downed(Fighter* fp);
+/// Frames until the fighter lands on the stage (99: not soon, or not onto
+/// the stage).
+int tactics_FramesToLand(Fighter* fp);
+/// Frames from the input to an aerial's hitbox, for this fighter.
+int tactics_AerialFrames(Fighter* fp, int move);
+/// Frames of jump squat before leaving the ground.
+int tactics_JumpSquat(Fighter* fp);
 /// True while a queued pick drives this fighter. Between picks Melee's own
 /// CPU AI drives it (see tactics_FilterAi).
 bool tactics_Controls(Fighter* fp);

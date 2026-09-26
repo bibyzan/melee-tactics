@@ -137,7 +137,10 @@ export function createPlanOverlay({ stage, pick }) {
     // The intent ("Attack: Down Tilt", "Shield > Grab") sets the stripe colour.
     const intent = (label.split(/[:>]/)[0] || '').trim();
     button.style.setProperty('--tint', INTENT_COLOURS[intent] || '#8a8aa0');
-    const [lead, rest] = label.includes(':') ? label.split(/:\s*/, 2) : [null, label];
+    // "Attack: Down Tilt" and "Grab > Up Throw" alike: the intent goes in the
+    // small label, the move is the button's text.
+    const parts = label.match(/^(.+?)(?::\s*|\s+>\s+)(.+)$/);
+    const [lead, rest] = parts ? [parts[1], parts[2]] : [null, label];
     if (lead) button.append(Object.assign(document.createElement('small'), { textContent: lead }));
     button.append(Object.assign(document.createElement('span'), { textContent: rest }));
     button.addEventListener('pointerdown', (event) => {

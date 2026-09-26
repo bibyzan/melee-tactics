@@ -280,6 +280,18 @@ static int aerialFor(Fighter* self, float dx, float dy)
     return dx * self->facing_dir >= 0.0f || self->ground_or_air != GA_Air ? TM_FAIR : TM_BAIR;
 }
 
+/* The aerial hits within air frames of air left: its startup, plus the jump
+ * squat when it starts from the ground, and a little to spare. */
+static bool aerialFits(Fighter* self, int move, int air, bool from_ground)
+{
+    int frames = tactics_AerialFrames(self, move) + 3;
+
+    if (from_ground) {
+        frames += tactics_JumpSquat(self);
+    }
+    return frames <= air;
+}
+
 /* Neutral: one row per intent, each carried out the way that fits. */
 static int buildOptions(int which, Opt* out, int cap)
 {
@@ -326,9 +338,15 @@ static int buildOptions(int which, Opt* out, int cap)
     }
     if (self->ground_or_air == GA_Air) {
         /* Both already off the ground: swing, drift out, or dodge. */
+        int air = tactics_FramesToLand(self);
+
         move = aerialFor(self, sdx, dy);
-        n = addOpt(ckind, out, n, cap, move, IN_ATTACK);
-        n = addOpt(ckind, out, n, cap, move == TM_NAIR ? TM_FAIR : TM_NAIR, IN_ATTACK);
+        if (aerialFits(self, move, air, false)) {
+            n = addOpt(ckind, out, n, cap, move, IN_ATTACK);
+        }
+        if (aerialFits(self, TM_NAIR, air, false)) {
+            n = addOpt(ckind, out, n, cap, move == TM_NAIR ? TM_FAIR : TM_NAIR, IN_ATTACK);
+        }
         n = addOpt(ckind, out, n, cap, TM_DRIFT, IN_BACK_OFF);
         n = addOpt(ckind, out, n, cap, TM_AIRDODGE, IN_DODGE);
         return n;
@@ -379,36 +397,61 @@ static int buildReactOptions(int which, Opt* out, int cap)
     if (self != NULL && foe != NULL) {
         float dx = foe->cur_pos.x - self->cur_pos.x;
         float dy = foe->cur_pos.y - self->cur_pos.y;
+        int air = tactics_FramesToLand(self);
+        const u8 tries[] = { (u8) aerialFor(self, dx, dy), TM_NAIR };
+        int i;
 
-        n = addOpt(ckind, out, n, cap, aerialFor(self, dx, dy), IN_FIGHT);
-    } else {
-        n = addOpt(ckind, out, n, cap, TM_NAIR, IN_FIGHT);
+        /* Only a swing that comes out before landing. */
+        for (i = 0; i < 2; i++) {
+            if (aerialFits(self, tries[i], air, false)) {
+                n = addOpt(ckind, out, n, cap, tries[i], IN_FIGHT);
+                break;
+            }
+        }
     }
     return n;
 }
 
 /* The chaser about to reach a launched foe: the juggle that fits, a
  * different swing to cover a dodge, an anti-air from below, or wait to
- * read the landing. */
+ * read the landing. Only aerials that hit before the foe (or the chaser)
+ * lands are offered, jump squat included from the ground. */
 static int buildChaseOptions(int which, Opt* out, int cap)
 {
     Fighter* self = portFighter(which);
     Fighter* foe = portFighter(which ^ 1);
     int ckind = draft[which].ckind;
     int n = 0;
-    int move;
+    int i, air;
+    bool ground;
     float dx, dy;
 
     if (self == NULL || foe == NULL) {
-        n = addOpt(ckind, out, n, cap, TM_UAIR, IN_JUGGLE);
         return addOpt(ckind, out, n, cap, TM_NONE, IN_WAIT);
     }
     dx = foe->cur_pos.x - self->cur_pos.x;
     dy = foe->cur_pos.y - self->cur_pos.y;
-    move = aerialFor(self, dx, dy);
-    n = addOpt(ckind, out, n, cap, move, IN_JUGGLE);
-    n = addOpt(ckind, out, n, cap, move == TM_NAIR ? TM_FAIR : TM_NAIR, IN_COVER);
-    if (self->ground_or_air != GA_Air && dy > 10.0f) {
+    ground = self->ground_or_air != GA_Air;
+    air = tactics_FramesToLand(foe);
+    if (!ground && tactics_FramesToLand(self) < air) {
+        air = tactics_FramesToLand(self);
+    }
+    {
+        const u8 tries[] = { (u8) aerialFor(self, dx, dy), TM_NAIR, TM_UAIR, TM_FAIR, TM_BAIR };
+        int juggle = TM_NONE;
+
+        for (i = 0; i < 5; i++) {
+            if (tries[i] == juggle || !aerialFits(self, tries[i], air, ground)) {
+                continue;
+            }
+            n = addOpt(ckind, out, n, cap, tries[i], juggle == TM_NONE ? IN_JUGGLE : IN_COVER);
+            if (juggle != TM_NONE) {
+                break;
+            }
+            juggle = tries[i];
+        }
+    }
+    if (ground && dy > 10.0f) {
         n = addOpt(ckind, out, n, cap, TM_USMASH, IN_ANTI_AIR);
     }
     return addOpt(ckind, out, n, cap, TM_NONE, IN_WAIT);

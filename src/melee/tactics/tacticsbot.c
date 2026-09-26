@@ -37,6 +37,8 @@ typedef struct Brain {
  * ground the CPU handles the landing, with no pause. */
 #define REACT_AIR_FRAMES 18
 #define CHASE_AIR_FRAMES 12
+/* Frames an aerial should hit before its user or its target lands. */
+#define AIR_MARGIN 3
 /* Frames an aerial keeps aiming, across hops, before its pick is dropped. */
 #define AIM_LIMIT 75
 /* Frames a queued move spends closing to its reach before it goes anyway. */
@@ -341,8 +343,47 @@ static bool chaseArriving(Fighter* a, Fighter* v)
     return false;
 }
 
+static int framesToLand(Fighter* f);
+int tactics_AerialFrames(Fighter* f, int move)
+{
+    int frames = tactics_AiFrames(f->kind, move, true);
+    const TacticsMoveInfo* info;
+
+    if (frames >= 0) {
+        return frames;
+    }
+    info = tactics_GetMove(-1, move);
+    return info != NULL ? info->startup : 12;
+}
+
+int tactics_JumpSquat(Fighter* f)
+{
+    return (int) f->co_attrs.jump_startup_time;
+}
+
+/* The character's quickest aerial: the least air a swing needs. */
+static int quickestAerial(Fighter* f)
+{
+    int best = 99;
+    int m;
+
+    for (m = TM_NAIR; m <= TM_DAIR; m++) {
+        int frames = tactics_AerialFrames(f, m);
+
+        if (frames < best) {
+            best = frames;
+        }
+    }
+    return best;
+}
+
 /* Frames until a fighter lands on the stage, by its current drift; 99 for
  * longer, or for a fall past the stage. */
+int tactics_FramesToLand(Fighter* f)
+{
+    return framesToLand(f);
+}
+
 static int framesToLand(Fighter* f)
 {
     float vy = f->pos_delta.y;
@@ -401,8 +442,17 @@ int tactics_AirBreak(bool* picks)
         chaser_free = onStage(a) && !tumbling(a) && a->victim_gobj == NULL &&
                       a->dmg.x195c_hitlag_frames <= 0.0f && queueDone(p ^ 1) && actionable(a);
         air_left = framesToLand(v);
-        meet = !chase_seen[p] && chaser_free && air_left >= CHASE_AIR_FRAMES &&
-               chaseArriving(a, v);
+        /* A chase pick is a swing: it needs the chaser's jump squat (from
+         * the ground) and its quickest aerial to fit before the foe lands,
+         * and an airborne chaser must not land first either. */
+        if (chaser_free) {
+            int swing = quickestAerial(a) + AIR_MARGIN;
+            int need = swing + (a->ground_or_air == GA_Air ? 0 : tactics_JumpSquat(a));
+
+            chaser_free = air_left >= CHASE_AIR_FRAMES && air_left >= need &&
+                          (a->ground_or_air != GA_Air || framesToLand(a) >= swing);
+        }
+        meet = !chase_seen[p] && chaser_free && chaseArriving(a, v);
         /* The launched fighter picks only once it can act, so its pick comes
          * out right away: when hitstun ends, or when the chaser arrives
          * after that. With no time left before landing there is no pick. */
@@ -433,6 +483,8 @@ static void pad(Fighter* f, int x, int y, unsigned buttons, int cx, int cy)
     f->cpu.rtrigger = (buttons & HSD_PAD_R) ? 0xFF : 0;
 }
 
+static bool dashing(Fighter* f);
+
 static void beginMove(Fighter* f, Brain* b, int dir, int move, const TacticsMoveInfo* info,
                        bool air)
 {
@@ -455,7 +507,9 @@ static void beginMove(Fighter* f, Brain* b, int dir, int move, const TacticsMove
         }
         break;
     case TI_DASH:
-        pad(f, dir * 127, 0, 0, 0, 0);
+        /* Neutral first, so the next frame's full push is a dash; already
+         * dashing or running, keep it going. */
+        pad(f, dashing(f) ? dir * 127 : 0, 0, 0, 0, 0);
         b->phase = 0;
         break;
     case TI_SMASH:
@@ -566,6 +620,12 @@ static bool running(Fighter* f)
     return inRange(f->motion_id, ftCo_MS_TurnRun, ftCo_MS_RunBrake);
 }
 
+/* In a dash or a run proper, where A is a dash attack. */
+static bool dashing(Fighter* f)
+{
+    return inRange(f->motion_id, ftCo_MS_Dash, ftCo_MS_RunDirect);
+}
+
 /* A run only gives way to a dash attack, a grab, a jump or side B. Anything
  * else crouches out of it first; every ground attack comes out of a crouch. */
 static bool needsStop(int move, const TacticsMoveInfo* info)
@@ -613,7 +673,34 @@ static void shieldThink(Fighter* f, Fighter* enemy, Brain* b, float dx)
 
 /* Back off > Punish: dash away, wait for the foe to swing at the air, then
  * dash attack into it. Nothing to punish, it ends. */
-static void backOffThink(Fighter* f, Fighter* enemy, Brain* b, float dx, int dir)
+/* Dash in, then dash attack once it will reach. A dash only starts when the
+ * stick snaps from neutral to full, so until the fighter is dashing the
+ * stick flicks between the two; A pressed from a walk or a stand would be a
+ * forward tilt or a jab instead. 1 once A is in, -1 when no dash came. */
+static int dashAttack(Fighter* f, Fighter* enemy, Brain* b, int dir, const TacticsMoveInfo* info)
+{
+    float dx = fabsf(enemy->cur_pos.x - f->cur_pos.x);
+    bool close;
+
+    if (!dashing(f)) {
+        if (b->age > 30) {
+            return -1;
+        }
+        pad(f, (b->age & 1) ? dir * 127 : 0, 0, 0, 0, 0);
+        return 0;
+    }
+    close = tactics_AiKnows(f, TM_DASH_ATTACK) ? tactics_AiConnects(f, enemy, TM_DASH_ATTACK)
+                                              : dx <= info->ground.x1;
+    if (!close && b->age < 45) {
+        pad(f, dir * 127, 0, 0, 0, 0);
+        return 0;
+    }
+    pad(f, dir * 127, 0, HSD_PAD_A, 0, 0);
+    return 1;
+}
+
+static void backOffThink(Fighter* f, Fighter* enemy, Brain* b, float dx, int dir,
+                         const TacticsMoveInfo* dash)
 {
     if (b->phase == 0) {
         if (b->age < 12 && f->ground_or_air == GA_Ground &&
@@ -635,12 +722,8 @@ static void backOffThink(Fighter* f, Fighter* enemy, Brain* b, float dx, int dir
         }
         return;
     }
-    if (b->age < 3 && !running(f)) {
-        pad(f, dir * 127, 0, 0, 0, 0);
-        return;
-    }
-    pad(f, dir * 127, 0, HSD_PAD_A, 0, 0);
-    if (b->age > 20) {
+    /* phase 2: run in on the whiff. No dash, no punish. */
+    if (dash == NULL || dashAttack(f, enemy, b, dir, dash) < 0 || b->age > 50) {
         b->saw_attack = true;
     }
 }
@@ -805,7 +888,7 @@ void tactics_Think(Fighter_GObj* gobj)
             return;
         }
         if (info->input == TI_BACKOFF && !b->saw_attack) {
-            backOffThink(f, enemy, b, dx, dir);
+            backOffThink(f, enemy, b, dx, dir, tactics_GetMove(l->ckind, TM_DASH_ATTACK));
             return;
         }
         if (info->input == TI_SHIELD && f->motion_id == ftCo_MS_CatchWait) {
@@ -854,12 +937,14 @@ void tactics_Think(Fighter_GObj* gobj)
             return;
         }
         if (info->input == TI_DASH && b->phase == 0) {
-            if (b->age < 3) {
-                pad(f, dir * 127, 0, 0, 0, 0);
-                return;
+            switch (dashAttack(f, enemy, b, dir, info)) {
+            case 1:
+                b->phase = 1;
+                break;
+            case -1:
+                giveUp(f, b, info);
+                break;
             }
-            pad(f, dir * 127, 0, HSD_PAD_A, 0, 0);
-            b->phase = 1;
             return;
         }
         if (air) {
@@ -905,8 +990,11 @@ void tactics_Think(Fighter_GObj* gobj)
         /* Melee's CPU selector says when the character's own hitbox will
          * land; moves it has no entry for use the generic reach. Either way,
          * after half a second of closing in, swing anyway. */
-        wait = tactics_AiKnows(f, move) ? !tactics_AiConnects(f, enemy, move)
-                                        : fabsf(dx) > reach;
+        /* A dash attack closes the distance itself: walking in first would
+         * only leave the stick half pushed, which never becomes a dash. */
+        wait = info->input == TI_DASH           ? false
+               : tactics_AiKnows(f, move) ? !tactics_AiConnects(f, enemy, move)
+                                          : fabsf(dx) > reach;
         if (wait && ++b->approach < APPROACH_LIMIT) {
             /* Keep a run going rather than dropping to a walk. */
             pad(f, dir * (running(f) ? 127 : 65), 0, 0, 0, 0);

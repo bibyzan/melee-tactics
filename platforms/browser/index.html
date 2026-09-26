@@ -197,7 +197,15 @@
               touch-action: none; -webkit-tap-highlight-color: transparent; }
   .plan-row small { color: var(--tint); font-size: 0.62em; font-weight: 800; letter-spacing: 0.08em;
                     text-transform: uppercase; }
-  .plan-row span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+  /* Wrapped onto a second line rather than cut off in a narrow band. */
+  .plan-row span { max-width: 100%; overflow: hidden; line-height: 1.12; overflow-wrap: anywhere;
+                   display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+  @media (orientation: landscape) {
+    .plan-row { font-size: clamp(12px, 2.1vw, 19px); padding: 0 8px 0 14px; }
+    /* The icons say who each fighter is; names would only be cut off. */
+    .tile:has(img) span { display: none; }
+    .tile .stock { height: min(88%, 44px); }
+  }
   .plan-row.current { box-shadow: 0 4px 0 #14141c, 0 5px 10px #0007, inset 0 0 0 2px #e0b03088; }
   .plan-row:active, .plan-row.chosen { transform: translateY(4px);
                                        box-shadow: 0 0 0 #14141c, 0 0 16px #e0b03066, inset 0 2px 6px #0006; }

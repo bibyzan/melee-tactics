@@ -331,6 +331,15 @@ bool create_window(AuroraBackend backend) {
 #endif
 #if TARGET_OS_IOS || TARGET_OS_TV
   flags |= SDL_WINDOW_FULLSCREEN;
+#elif defined(__EMSCRIPTEN__)
+  // The page owns the canvas: its size is the render budget, and CSS only
+  // scales it. A resizable window would have SDL set the canvas to its CSS
+  // box on every browser resize (a phone turning), dropping the resolution
+  // and reallocating the swapchain mid-rotation.
+  flags |= SDL_WINDOW_HIDDEN;
+  if (g_config.startFullscreen) {
+    flags |= SDL_WINDOW_FULLSCREEN;
+  }
 #else
   flags |= SDL_WINDOW_HIDDEN | SDL_WINDOW_RESIZABLE;
   if (g_config.startFullscreen) {
