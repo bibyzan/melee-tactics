@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-// Draws Melee Tactics' app icon: a gold ring and a bold M on a fiery
-// red-orange field, in Melee's title-screen colours (an original emblem, not
-// Nintendo's). Full bleed, so iOS and Android can round or mask the corners
+// Draws Melee Tactics' app icon: a shine, the glowing blue hexagon of a
+// reflector, on a deep night-blue field (an original drawing, not Nintendo's
+// art). Full bleed, so iOS and Android can round or mask the corners
 // themselves.
 //
 //	go run ./tools/icon platforms/browser/icons
@@ -29,6 +29,12 @@ func over(dst, src rgba) rgba {
 	return rgba{mix(dst.r, src.r), mix(dst.g, src.g), mix(dst.b, src.b), a}
 }
 
+// Light added on top, as a glow is.
+func add(dst, light rgba) rgba {
+	return rgba{math.Min(1, dst.r+light.r*light.a), math.Min(1, dst.g+light.g*light.a),
+		math.Min(1, dst.b+light.b*light.a), dst.a}
+}
+
 func lerp(a, b rgba, t float64) rgba {
 	t = math.Max(0, math.Min(1, t))
 	return rgba{a.r + (b.r-a.r)*t, a.g + (b.g-a.g)*t, a.b + (b.b-a.b)*t, a.a + (b.a-a.a)*t}
@@ -38,53 +44,63 @@ func hex(v uint32) rgba {
 	return rgba{float64(v>>16&0xFF) / 255, float64(v>>8&0xFF) / 255, float64(v&0xFF) / 255, 1}
 }
 
-// Distance from p to the segment ab.
-func segment(px, py, ax, ay, bx, by float64) float64 {
-	dx, dy := bx-ax, by-ay
-	t := math.Max(0, math.Min(1, ((px-ax)*dx+(py-ay)*dy)/(dx*dx+dy*dy)))
-	return math.Hypot(px-(ax+t*dx), py-(ay+t*dy))
+func withAlpha(c rgba, a float64) rgba {
+	c.a = math.Max(0, math.Min(1, a))
+	return c
 }
 
-// The M: two legs and a V between them, as thick strokes.
-func inM(x, y float64) bool {
-	const w = 0.042
-	legs := [][4]float64{
-		{0.32, 0.67, 0.32, 0.34},
-		{0.32, 0.34, 0.5, 0.56},
-		{0.5, 0.56, 0.68, 0.34},
-		{0.68, 0.34, 0.68, 0.67},
+// Signed distance from (x, y) to a hexagon of inradius r centred on the
+// origin, pointy at the top and bottom: negative inside.
+func hexagon(x, y, r float64) float64 {
+	// The flat-topped hexagon's distance, with x and y swapped.
+	px, py := math.Abs(y), math.Abs(x)
+	const kx, ky, kz = -0.866025404, 0.5, 0.577350269
+	d := math.Min(kx*px+ky*py, 0)
+	px -= 2 * d * kx
+	py -= 2 * d * ky
+	cx := math.Max(-kz*r, math.Min(kz*r, px))
+	px -= cx
+	py -= r
+	l := math.Hypot(px, py)
+	if py < 0 {
+		return -l
 	}
-	for _, l := range legs {
-		if segment(x, y, l[0], l[1], l[2], l[3]) <= w {
-			return true
-		}
-	}
-	return false
-}
-
-func inRing(x, y float64) bool {
-	d := math.Hypot(x-0.5, y-0.5)
-	return d >= 0.345 && d <= 0.405
+	return l
 }
 
 // One sample of the icon at (x, y) in [0, 1].
 func sample(x, y float64) rgba {
-	// The field: hot at the top middle, down to a deep red at the edges.
-	d := math.Hypot(x-0.5, (y-0.4)*1.1)
-	c := lerp(hex(0xFF9A2A), hex(0xD8261E), d/0.45)
-	c = lerp(c, hex(0x3A0608), (d-0.45)/0.4)
-	// A soft shadow under the ring and the M.
-	const sx, sy = 0.012, 0.02
-	if inRing(x-sx, y-sy) || inM(x-sx, y-sy) {
-		c = over(c, rgba{0, 0, 0, 0.35})
+	cx, cy := x-0.5, y-0.5
+	// The field: night blue, a little lighter behind the shine.
+	c := lerp(hex(0x16245a), hex(0x03050f), math.Hypot(cx, cy)/0.7)
+
+	const r = 0.3
+	d := hexagon(cx, cy, r)
+	// The glow around it, fading out from the edge.
+	if d > 0 {
+		c = add(c, withAlpha(hex(0x3aa8ff), 0.85*math.Exp(-d/0.055)))
 	}
-	// Gold, bright at the top and deeper at the bottom.
-	gold := lerp(hex(0xFFF4C8), hex(0xE0A020), (y-0.1)/0.8)
-	if inRing(x, y) {
-		c = over(c, gold)
+	if d <= 0 {
+		// The body: pale at the heart, deepening to blue at the rim, with
+		// a second, fainter hexagon inside it.
+		depth := -d / r
+		body := lerp(hex(0x2a6cff), hex(0xd8fbff), depth*1.4)
+		c = over(c, withAlpha(body, 0.92))
+		if inner := hexagon(cx, cy, r*0.55); math.Abs(inner) < 0.012 {
+			c = add(c, withAlpha(hex(0xffffff), 0.5*(1-math.Abs(inner)/0.012)))
+		}
 	}
-	if inM(x, y) {
-		c = over(c, lerp(hex(0xFFFFFF), hex(0xFFE6A0), (y-0.3)/0.4))
+	// The rim: a bright white-cyan edge.
+	if math.Abs(d) < 0.022 {
+		c = over(c, withAlpha(lerp(hex(0xffffff), hex(0x9ae8ff), (cy+r)/(2*r)), 1-math.Abs(d)/0.022*0.6))
+	}
+	// Sparkles at the top-left and bottom-right points of light.
+	for _, s := range [][3]float64{{-0.2, -0.27, 0.07}, {0.23, 0.24, 0.05}} {
+		dx, dy := cx-s[0], cy-s[1]
+		arm := math.Min(math.Abs(dx)*math.Hypot(dy, 0.002), math.Abs(dy)*math.Hypot(dx, 0.002))
+		if math.Hypot(dx, dy) < s[2] {
+			c = add(c, withAlpha(hex(0xffffff), math.Exp(-arm/0.00006)*(1-math.Hypot(dx, dy)/s[2])))
+		}
 	}
 	return c
 }
