@@ -3,7 +3,7 @@
  * browser's version is platforms/browser/plan_web.c). */
 #include "pc/plan_ui.h"
 
-void pc_plan_ui(bool visible, const char* title, const char* sub, const char* const* labels,
+bool pc_plan_ui(bool visible, const char* title, const char* sub, const char* const* labels,
                 int count, int cursor) {
     (void)visible;
     (void)title;
@@ -11,4 +11,5 @@ void pc_plan_ui(bool visible, const char* title, const char* sub, const char* co
     (void)labels;
     (void)count;
     (void)cursor;
+    return false;
 }

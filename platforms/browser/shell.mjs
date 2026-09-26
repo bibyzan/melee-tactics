@@ -274,7 +274,7 @@ async function begin() {
     if (touch) {
       createTouchControls({ left: $('pad-left'), right: $('pad-right'),
                             send: (buttons) => Module._browser_touch_pad(buttons) });
-      Module.onPlan = createPlanOverlay({ game: $('game'), pick: (index) => Module._browser_plan_pick(index) });
+      Module.onPlan = createPlanOverlay({ stage: $('stage'), pick: (index) => Module._browser_plan_pick(index) });
     }
     status('');
     $('canvas').focus();

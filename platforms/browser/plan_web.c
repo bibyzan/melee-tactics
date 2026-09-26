@@ -11,12 +11,15 @@
 void tactics_PlanTap(int index);
 
 // clang-format off
+EM_JS(int, plan_web_active, (void), {
+  return Module.onPlan ? 1 : 0;
+});
 EM_JS(void, plan_web_show, (int visible, const char* text, int cursor), {
   if (Module.onPlan) Module.onPlan(visible ? UTF8ToString(text).split('\x1f') : null, cursor);
 });
 // clang-format on
 
-void pc_plan_ui(bool visible, const char* title, const char* sub, const char* const* labels,
+bool pc_plan_ui(bool visible, const char* title, const char* sub, const char* const* labels,
                 int count, int cursor) {
     static char last[1024];
     static int last_cursor = -2;
@@ -29,12 +32,16 @@ void pc_plan_ui(bool visible, const char* title, const char* sub, const char* co
     for (i = 0; visible && i < count && len < sizeof text; i++) {
         len += (size_t)snprintf(text + len, sizeof text - len, "\x1f%s", labels[i]);
     }
+    if (!plan_web_active()) {
+        return false;
+    }
     if (strcmp(text, last) == 0 && cursor == last_cursor) {
-        return;
+        return true;
     }
     snprintf(last, sizeof last, "%s", text);
     last_cursor = cursor;
     plan_web_show(visible, text, cursor);
+    return true;
 }
 
 /* A tapped row: the game picks it, as if chosen and confirmed. */

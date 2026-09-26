@@ -9,10 +9,12 @@ extern "C" {
 #endif
 
 /* Melee Tactics' pick panel, mirrored for the host: on a touch screen the
- * browser page lays big buttons over it (count may be 0 while waiting), and a
- * tap comes back through tactics_PlanTap. Called whenever the panel is drawn;
- * cheap when nothing changed. Native builds ignore it. */
-void pc_plan_ui(bool visible, const char* title, const char* sub, const char* const* labels,
+ * browser page shows it as big buttons in the space beside or below the game
+ * (count may be 0 while waiting), and a tap comes back through
+ * tactics_PlanTap. Called whenever the panel is drawn; cheap when nothing
+ * changed. True when the host shows the panel itself, so the game need not
+ * draw its own over the fight. Native builds ignore it. */
+bool pc_plan_ui(bool visible, const char* title, const char* sub, const char* const* labels,
                 int count, int cursor);
 
 #ifdef __cplusplus

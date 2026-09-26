@@ -87,19 +87,25 @@
   .btn-start { width: 36%; height: 15%; left: 32%; top: 6%; border-radius: 999px; background: #c9c9d6;
                font-size: calc(var(--pad) * 0.06); letter-spacing: 0.08em; }
 
-  /* The tappable pick list, over the game's own list (the lower half of the
-     picture: 220 to 470 of 480). */
-  #game { position: relative; }
-  .plan { position: absolute; left: 2%; right: 2%; top: 45.5%; bottom: 2%; display: flex;
-          flex-direction: column; gap: 4px; padding: 6px; box-sizing: border-box;
-          background: #07070c; border-top: 2px solid #e0b030a0; border-radius: 4px; }
+  /* The tappable pick list, in the space the game leaves: over the controls,
+     below the game in portrait, split across the side bands in landscape. */
+  .plan { z-index: 2; place-self: stretch; display: flex; flex-direction: column; gap: 6px;
+          padding: 8px; box-sizing: border-box; background: #0b0b10; min-width: 0; min-height: 0; }
   .plan[hidden] { display: none; }
-  .plan-head { color: #ddd; font-size: clamp(11px, 2.4vmin, 16px); white-space: nowrap; overflow: hidden;
-               text-overflow: ellipsis; }
+  .plan-left { grid-area: left; }
+  .plan-right { grid-area: right; }
+  @media (orientation: landscape) {
+    .plan-left { padding-left: max(8px, var(--inset)); }
+    .plan-right { padding-right: max(8px, var(--inset)); }
+  }
+  @media (orientation: portrait) {
+    .plan-left { grid-area: 2 / 1 / 3 / 3; padding-bottom: max(8px, env(safe-area-inset-bottom)); }
+  }
+  .plan-head { color: #ddd; font-size: clamp(11px, 2.6vmin, 16px); line-height: 1.25; }
   .plan-head b { color: #f0c850; }
-  .plan-row { flex: 1; min-height: 0; border: 0; border-radius: 6px; background: #22222e; color: #e8e8f0;
-              font: 700 clamp(12px, 3vmin, 20px) system-ui, sans-serif; text-align: left; padding: 0 12px;
-              touch-action: none; -webkit-tap-highlight-color: transparent; }
+  .plan-row { flex: 1; min-height: 0; max-height: 72px; border: 0; border-radius: 8px; background: #22222e;
+              color: #e8e8f0; font: 700 clamp(12px, 3.4vmin, 20px) system-ui, sans-serif; text-align: left;
+              padding: 0 12px; overflow: hidden; touch-action: none; -webkit-tap-highlight-color: transparent; }
   .plan-row.current { background: #34344a; box-shadow: inset 3px 0 0 #e0b030; }
   .plan-row.chosen { background: #e0b030; color: #111; }
   #status { color: #fc6; text-align: center; padding: 4px 16px; }

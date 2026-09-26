@@ -75,6 +75,7 @@ enum {
     LINE_SUB,
     LINE_OPT,
     LINE_HINT = LINE_OPT + OPT_CAP,
+    LINE_BANNER, /* "Waiting for P1 to pick", when the host shows the list */
     LINE_COUNT
 };
 
@@ -150,6 +151,8 @@ static HSD_Text* plan_text;
 static HSD_GObj* plan_panel;
 static PlanLine plan_lines[LINE_COUNT];
 static bool plan_ui;
+/* The host shows the pick panel itself (pc_plan_ui): the game draws none. */
+static bool plan_external;
 
 static GXColor col_white = { 0xFF, 0xFF, 0xFF, 0xFF };
 static GXColor col_dim = { 0xB0, 0xB0, 0xB0, 0xFF };
@@ -347,6 +350,11 @@ static void drawPlanPanel(HSD_GObj* gobj, int pass)
         return;
     }
     hsd_80391A04(1.0f, 1.0f, 1);
+    /* The host shows the list: just a banner along the bottom. */
+    if (plan_external) {
+        DrawRectangle(12.0f, -470.0f, 616.0f, 40.0f, &panel);
+        return;
+    }
     DrawRectangle(12.0f, -470.0f, 616.0f, 250.0f, &panel);
     DrawRectangle(24.0f, -228.0f, 592.0f, 2.0f, &rule);
 }
@@ -393,6 +401,7 @@ static void ensurePlanUi(void)
         addPlanLine(LINE_OPT + i, 36.0f, y, 0.42f);
     }
     addPlanLine(LINE_HINT, 36.0f, 458.0f, 0.36f);
+    addPlanLine(LINE_BANNER, 36.0f, 424.0f, 0.42f);
     plan_ui = true;
 }
 
@@ -408,6 +417,19 @@ static void destroyPlanUi(void)
     }
     plan_ui = false;
     memset(plan_lines, 0, sizeof(plan_lines));
+}
+
+static void clearPlanLines(void);
+
+/* With the list on the host's buttons, the game only says whose pick it is. */
+static void showWaitingFor(int port)
+{
+    char msg[64];
+
+    clearPlanLines();
+    snprintf(msg, sizeof msg, "Waiting for P%d to pick...", port + 1);
+    setPlanLine(&plan_lines[LINE_BANNER], msg);
+    setPlanColor(&plan_lines[LINE_BANNER], &col_gold);
 }
 
 static void showPlan(void)
@@ -441,7 +463,11 @@ static void showPlan(void)
             setPlanLine(&plan_lines[LINE_OPT + i], "");
         }
         setPlanLine(&plan_lines[LINE_HINT], "");
-        pc_plan_ui(true, plan_lines[LINE_TITLE].text, plan_lines[LINE_SUB].text, NULL, 0, -1);
+        plan_external =
+            pc_plan_ui(true, plan_lines[LINE_TITLE].text, plan_lines[LINE_SUB].text, NULL, 0, -1);
+        if (plan_external) {
+            showWaitingFor(who ^ 1); /* who is this side here */
+        }
         return;
     }
     snprintf(buf, sizeof(buf), "P%d %s  %d%%", who + 1, tactics_FighterName(draft[who].ckind),
@@ -489,21 +515,30 @@ static void showPlan(void)
     }
     setPlanColor(&plan_lines[LINE_HINT], &col_dim);
     /* On a touch screen the page lays tappable buttons over this list. */
-    pc_plan_ui(true, plan_lines[LINE_TITLE].text, plan_lines[LINE_SUB].text, label_ptrs,
-               opt_n[who], opt_cursor[who]);
+    plan_external = pc_plan_ui(true, plan_lines[LINE_TITLE].text, plan_lines[LINE_SUB].text,
+                               label_ptrs, opt_n[who], opt_cursor[who]);
+    if (plan_external) {
+        showWaitingFor(who);
+    }
 }
 
-static void hidePlanText(void)
+/* The game's own panel text goes blank; the host's copy is unaffected. */
+static void clearPlanLines(void)
 {
     int i;
 
-    pc_plan_ui(false, "", "", NULL, 0, -1);
     if (!plan_ui) {
         return;
     }
     for (i = 0; i < LINE_COUNT; i++) {
         setPlanLine(&plan_lines[i], "");
     }
+}
+
+static void hidePlanText(void)
+{
+    pc_plan_ui(false, "", "", NULL, 0, -1);
+    clearPlanLines();
 }
 
 static void closeFight(void)

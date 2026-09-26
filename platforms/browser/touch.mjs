@@ -90,41 +90,66 @@ export function wantsTouch(params) {
   return matchMedia('(pointer: coarse)').matches;
 }
 
-// The pick list as big buttons, laid over the game's own list while a break
-// waits for this player (plan_web.c mirrors it here). A tap picks and locks
-// in that move; while the other player is choosing it shows the message.
-export function createPlanOverlay({ game, pick }) {
-  const panel = document.createElement('div');
-  panel.className = 'plan';
-  panel.hidden = true;
-  game.append(panel);
+// The pick list as big buttons in the space the game leaves (plan_web.c
+// mirrors it here), over the on-screen controls while a break waits for this
+// player: below the game in portrait, split across the two side bands in
+// landscape. A tap picks and locks in that move; while the other player is
+// choosing it shows that instead.
+export function createPlanOverlay({ stage, pick }) {
+  const left = document.createElement('div');
+  const right = document.createElement('div');
+  left.className = 'plan plan-left';
+  right.className = 'plan plan-right';
+  left.hidden = right.hidden = true;
+  stage.append(left, right);
+  const landscape = matchMedia('(orientation: landscape)');
+  let last = null;
 
-  return function show(parts, cursor) {
+  function row(label, index, cursor) {
+    const button = document.createElement('button');
+    button.className = index === cursor ? 'plan-row current' : 'plan-row';
+    button.textContent = label;
+    button.addEventListener('pointerdown', (event) => {
+      event.preventDefault();
+      if (navigator.vibrate) navigator.vibrate(10);
+      for (const b of stage.querySelectorAll('.plan-row')) b.classList.remove('current');
+      button.classList.add('current', 'chosen');
+      pick(index);
+    });
+    return button;
+  }
+
+  function head(text, strong) {
+    const el = document.createElement('div');
+    el.className = 'plan-head';
+    el.append(Object.assign(document.createElement(strong ? 'b' : 'span'), { textContent: text }));
+    return el;
+  }
+
+  function show(parts, cursor) {
+    last = parts ? [parts, cursor] : null;
     if (!parts) {
-      panel.hidden = true;
+      left.hidden = right.hidden = true;
       return;
     }
     const [title, sub, ...labels] = parts;
-    panel.replaceChildren();
-    const head = document.createElement('div');
-    head.className = 'plan-head';
-    head.innerHTML = '<b></b> <span></span>';
-    head.firstChild.textContent = title;
-    head.lastChild.textContent = sub;
-    panel.append(head);
-    labels.forEach((label, index) => {
-      const button = document.createElement('button');
-      button.className = index === cursor ? 'plan-row current' : 'plan-row';
-      button.textContent = label;
-      button.addEventListener('pointerdown', (event) => {
-        event.preventDefault();
-        if (navigator.vibrate) navigator.vibrate(10);
-        panel.querySelectorAll('.plan-row').forEach((b) => b.classList.remove('current'));
-        button.classList.add('current', 'chosen');
-        pick(index);
-      });
-      panel.append(button);
-    });
-    panel.hidden = false;
-  };
+    const rows = labels.map((label, index) => row(label, index, cursor));
+    if (landscape.matches) {
+      // Half the rows each side, in order: left first.
+      const half = Math.ceil(rows.length / 2);
+      left.replaceChildren(head(title, true), ...rows.slice(0, half));
+      right.replaceChildren(head(sub, false), ...rows.slice(half));
+      right.hidden = false;
+    } else {
+      const both = head(title, true);
+      both.append(' ', Object.assign(document.createElement('span'), { textContent: sub }));
+      left.replaceChildren(both, ...rows);
+      right.hidden = true;
+    }
+    left.hidden = false;
+  }
+
+  // Turning the phone moves the list.
+  landscape.addEventListener('change', () => last && show(...last));
+  return show;
 }
