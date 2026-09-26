@@ -12,7 +12,8 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Melee Tactics">
 <title>Melee Tactics</title>
-<link rel="icon" href="data:,">
+<link rel="icon" type="image/png" href="./icons/favicon-32.png">
+<link rel="apple-touch-icon" href="./icons/apple-touch-icon.png">
 <style>
   :root { color-scheme: dark; --pad: min(44vmin, 240px); }
   html, body { height: 100%; }
@@ -69,23 +70,81 @@
   #pad-right { grid-area: right; padding-right: env(safe-area-inset-right);
                padding-bottom: env(safe-area-inset-bottom); box-sizing: border-box; }
 
-  .dpad { position: relative; width: var(--pad); aspect-ratio: 1; border-radius: 50%;
-          background: radial-gradient(circle, #23232e 55%, #1a1a22 56%); touch-action: none; }
-  .dpad span { position: absolute; display: grid; place-items: center; width: 34%; height: 34%;
-               color: #8a8aa0; font-size: calc(var(--pad) * 0.1); border-radius: 12px; background: #2c2c3a; }
-  .dpad .up { left: 33%; top: 2%; } .dpad .down { left: 33%; bottom: 2%; }
-  .dpad .left { top: 33%; left: 2%; } .dpad .right { top: 33%; right: 2%; }
+  /* The D-pad: a cross on a round base, as on the GameCube pad. The arm
+     under the thumb lights and the cross tilts toward it. */
+  .dpad { position: relative; width: var(--pad); aspect-ratio: 1; border-radius: 50%; touch-action: none;
+          background: radial-gradient(circle at 50% 40%, #262634, #15151c 70%);
+          box-shadow: inset 0 2px 6px #0008, 0 0 0 2px #2a2a38; transition: transform 80ms ease-out;
+          overflow: hidden; }
+  .dpad .hub { position: absolute; left: 33%; top: 33%; width: 34%; height: 34%; background: #3a3a4c; }
+  .dpad span { position: absolute; display: grid; place-items: center; width: 34%; height: 33%;
+               color: #9a9ab4; font-size: calc(var(--pad) * 0.09); background: linear-gradient(#44445a, #34344a);
+               box-shadow: inset 0 1px 0 #ffffff22, 0 3px 0 #1c1c26; transition: background 60ms, color 60ms; }
+  .dpad .up { left: 33%; top: 1%; border-radius: 12px 12px 0 0; }
+  .dpad .down { left: 33%; bottom: 1%; border-radius: 0 0 12px 12px; }
+  .dpad .left { top: 33%; left: 1%; width: 33%; height: 34%; border-radius: 12px 0 0 12px; }
+  .dpad .right { top: 33%; right: 1%; width: 33%; height: 34%; border-radius: 0 12px 12px 0; }
   .dpad[data-dir="up"] .up, .dpad[data-dir="down"] .down,
-  .dpad[data-dir="left"] .left, .dpad[data-dir="right"] .right { background: #e0b030; color: #111; }
+  .dpad[data-dir="left"] .left, .dpad[data-dir="right"] .right {
+    background: linear-gradient(#ffd866, #e0a820); color: #1a1406; box-shadow: 0 0 14px #e0b03099; }
+  .dpad[data-dir="up"] { transform: perspective(500px) rotateX(9deg); }
+  .dpad[data-dir="down"] { transform: perspective(500px) rotateX(-9deg); }
+  .dpad[data-dir="left"] { transform: perspective(500px) rotateY(-9deg); }
+  .dpad[data-dir="right"] { transform: perspective(500px) rotateY(9deg); }
 
+  /* Face buttons: domed, with a lip underneath; pressing sinks them onto it. */
   .face { position: relative; width: var(--pad); aspect-ratio: 1; }
-  .btn { position: absolute; border: 0; border-radius: 50%; font: 800 calc(var(--pad) * 0.1) system-ui, sans-serif;
-         color: #111; touch-action: none; -webkit-tap-highlight-color: transparent; }
-  .btn.down { filter: brightness(1.35); transform: scale(0.94); }
-  .btn-a { width: 46%; height: 46%; right: 8%; bottom: 14%; background: #2fb86a; }
-  .btn-b { width: 28%; height: 28%; left: 6%; bottom: 4%; background: #d8433f; color: #fff; }
-  .btn-start { width: 36%; height: 15%; left: 32%; top: 6%; border-radius: 999px; background: #c9c9d6;
-               font-size: calc(var(--pad) * 0.06); letter-spacing: 0.08em; }
+  .btn { --c: #888; --lip: #444; position: absolute; border: 0; border-radius: 50%; padding: 0; overflow: hidden;
+         font: 800 calc(var(--pad) * 0.1) system-ui, sans-serif; color: #fff; text-shadow: 0 1px 2px #0006;
+         background: radial-gradient(circle at 35% 30%, #ffffff55, transparent 45%), var(--c);
+         box-shadow: 0 calc(var(--pad) * 0.025) 0 var(--lip), 0 calc(var(--pad) * 0.035) 10px #0008,
+                     inset 0 -3px 6px #0003;
+         transition: transform 60ms ease-out, box-shadow 60ms ease-out, filter 60ms;
+         touch-action: none; -webkit-tap-highlight-color: transparent; }
+  .btn-label { position: relative; z-index: 1; pointer-events: none; }
+  .btn.down { transform: translateY(calc(var(--pad) * 0.022)) scale(0.97); filter: brightness(1.2);
+              box-shadow: 0 calc(var(--pad) * 0.004) 0 var(--lip), 0 0 18px var(--c), inset 0 3px 8px #0005; }
+  .btn-a { --c: #2fb86a; --lip: #1b7040; width: 46%; height: 46%; right: 8%; bottom: 14%; }
+  .btn-b { --c: #d8433f; --lip: #862422; width: 28%; height: 28%; left: 6%; bottom: 4%; }
+  .btn-start { --c: #b9b9c8; --lip: #6c6c7c; width: 36%; height: 15%; left: 32%; top: 6%; border-radius: 999px;
+               color: #22222c; text-shadow: none; font-size: calc(var(--pad) * 0.06); letter-spacing: 0.08em; }
+  .ripple { position: absolute; width: 20px; height: 20px; margin: -10px 0 0 -10px; border-radius: 50%;
+            background: #ffffff66; pointer-events: none; animation: ripple 380ms ease-out forwards; }
+  @keyframes ripple { from { transform: scale(0.3); opacity: 1; } to { transform: scale(9); opacity: 0; } }
+
+  /* The fighter grid, on the menus: in the side bands in landscape, the two
+     halves below the game in portrait. */
+  .picker { z-index: 2; place-self: stretch; display: flex; flex-direction: column; gap: 6px; padding: 8px;
+            box-sizing: border-box; background: #0b0b10; min-width: 0; min-height: 0; }
+  .picker[hidden] { display: none; }
+  .picker-left { grid-area: left; } .picker-right { grid-area: right; }
+  @media (orientation: landscape) {
+    .picker-left { padding-left: max(8px, var(--inset)); }
+    .picker-right { padding-right: max(8px, var(--inset)); }
+  }
+  @media (orientation: portrait) {
+    .picker { padding-bottom: max(8px, env(safe-area-inset-bottom)); }
+  }
+  .picker-head { color: #ccc; font-size: clamp(11px, 2.6vmin, 16px); white-space: nowrap; overflow: hidden;
+                 text-overflow: ellipsis; }
+  .picker-head b { color: #f0c850; }
+  .picker-grid { flex: 1; min-height: 0; display: grid; gap: 4px;
+                 grid-template-columns: repeat(auto-fill, minmax(clamp(44px, 12vmin, 70px), 1fr));
+                 grid-auto-rows: minmax(0, 1fr); align-content: stretch; }
+  .tile { --tint: #888; position: relative; overflow: hidden; border: 0; border-radius: 7px; padding: 0 2px;
+          min-height: 22px; background: linear-gradient(90deg, var(--tint) 0 5px, #22222e 5px);
+          color: #e8e8f0; font: 700 clamp(9px, 2.3vmin, 13px) system-ui, sans-serif; line-height: 1.1;
+          touch-action: none; -webkit-tap-highlight-color: transparent; transition: transform 60ms; }
+  .tile:active { transform: scale(0.94); }
+  .tile.chosen { background: linear-gradient(90deg, var(--tint) 0 5px, #3a3220 5px);
+                 box-shadow: inset 0 0 0 2px #e0b030; color: #ffe08a; }
+  .tile-random { font-size: clamp(14px, 3.6vmin, 22px); }
+  .picker-action { flex: none; height: clamp(34px, 8vmin, 52px); border: 0; border-radius: 10px; position: relative;
+                   overflow: hidden; font: 800 clamp(13px, 3.4vmin, 20px) system-ui, sans-serif;
+                   touch-action: none; -webkit-tap-highlight-color: transparent; }
+  .picker-action.fight { background: linear-gradient(#ffd866, #e0a820); color: #1a1406; box-shadow: 0 3px 0 #8a6410; }
+  .picker-action.back { background: #2c2c3a; color: #ccc; box-shadow: 0 3px 0 #1a1a22; }
+  .picker-action:active { transform: translateY(2px); box-shadow: none; }
 
   /* The tappable pick list, in the space the game leaves: over the controls,
      below the game in portrait, split across the side bands in landscape. */
@@ -103,7 +162,8 @@
   }
   .plan-head { color: #ddd; font-size: clamp(11px, 2.6vmin, 16px); line-height: 1.25; }
   .plan-head b { color: #f0c850; }
-  .plan-row { flex: 1; min-height: 0; max-height: 72px; border: 0; border-radius: 8px; background: #22222e;
+  .plan-row { position: relative; overflow: hidden; flex: 1; min-height: 0; max-height: 72px; border: 0;
+              border-radius: 8px; background: #22222e; transition: transform 60ms;
               color: #e8e8f0; font: 700 clamp(12px, 3.4vmin, 20px) system-ui, sans-serif; text-align: left;
               padding: 0 12px; overflow: hidden; touch-action: none; -webkit-tap-highlight-color: transparent; }
   .plan-row.current { background: #34344a; box-shadow: inset 3px 0 0 #e0b030; }

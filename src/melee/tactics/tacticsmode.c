@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #include <dolphin/gx/GXStruct.h>
 #include <dolphin/pad.h>
@@ -65,6 +66,11 @@ static int tapped = -1;
 static int takeTap(int who);
 static int online_ckind[2];
 static bool p2_cpu = true;
+/* Against the CPU, a side left on Random gets a fighter as the match starts:
+ * P2 by default. */
+static bool random_pick[2] = { false, true };
+static int fighter_tap_slot = -1, fighter_tap_ckind;
+static int randomFighter(void);
 static int settle, plan_port, plan_frames, idle, since_plan;
 /* The launched port during a mid-air break, or -1 at a normal break. */
 static int react_port = -1;
@@ -1040,6 +1046,11 @@ static void enterBattle(GameModeState* state)
         draft[1].ckind = online_ckind[1];
         p2_cpu = false;
     }
+    for (i = 0; i < 2 && !online; i++) {
+        if (random_pick[i]) {
+            draft[i].ckind = randomFighter();
+        }
+    }
     /* A scripted run can pick its fighters by character kind number. */
     for (i = 0; i < 2 && !online; i++) {
         const char* pick = getenv(i == 0 ? "MELEE_TACTICS_P1" : "MELEE_TACTICS_P2");
@@ -1214,15 +1225,82 @@ void tactics_DraftEnter(void* unused)
 void tactics_DraftExit(void* unused)
 {
     (void) unused;
+    pc_fighter_ui(0, -1, -1);
     mnOnlineLobby_Destroy();
 }
 
+/* Any fighter but the Ice Climbers, whose pair the tactics cannot drive. */
+static int randomFighter(void)
+{
+    static bool seeded;
+    int ckind;
+
+    if (!seeded) {
+        srand((unsigned) time(NULL) ^ (unsigned) frames);
+        seeded = true;
+    }
+    do {
+        ckind = rand() % CKind_Playable_Count;
+    } while (ckind == CKind_PopoNana);
+    return ckind;
+}
+
+/* Against the CPU, Random sits before the first fighter in the cycle. */
 static void cycleFighter(int which, int delta)
 {
+    int at = random_pick[which] ? -1 : draft[which].ckind;
+
     do {
-        draft[which].ckind =
-            (draft[which].ckind + CKind_Playable_Count + delta) % CKind_Playable_Count;
-    } while (draft[which].ckind == CKind_PopoNana);
+        at = (at + 1 + CKind_Playable_Count + 1 + delta) % (CKind_Playable_Count + 1) - 1;
+    } while (at == CKind_PopoNana);
+    random_pick[which] = at < 0;
+    if (at >= 0) {
+        draft[which].ckind = at;
+    }
+}
+
+static const char* draftName(int which)
+{
+    return random_pick[which] ? "Random" : tactics_FighterName(draft[which].ckind);
+}
+
+void tactics_FighterTap(int slot, int ckind)
+{
+    fighter_tap_slot = slot;
+    fighter_tap_ckind = ckind;
+}
+
+/* A fighter tapped on the page's grid (plan_ui.h), for the menu on screen. */
+static void takeFighterTap(void)
+{
+    int slot = fighter_tap_slot;
+    int ckind = fighter_tap_ckind;
+
+    fighter_tap_slot = -1;
+    if (slot < 0 || ckind >= CKind_Playable_Count || ckind == CKind_PopoNana) {
+        return;
+    }
+    if (screen == SCR_CPU && slot < 2) {
+        random_pick[slot] = ckind < 0;
+        if (ckind >= 0) {
+            draft[slot].ckind = ckind;
+        }
+    } else if (screen == SCR_ONLINE || (screen == SCR_LOBBY && !online_ready)) {
+        my_ckind = ckind >= 0 ? ckind : randomFighter();
+    }
+}
+
+/* What the page's fighter grid shows for the screen: see pc_fighter_ui. */
+static void showFighterUi(void)
+{
+    if (screen == SCR_CPU) {
+        pc_fighter_ui(1, random_pick[0] ? -1 : draft[0].ckind,
+                      random_pick[1] ? -1 : draft[1].ckind);
+    } else if (screen == SCR_ONLINE || (screen == SCR_LOBBY && !online_ready)) {
+        pc_fighter_ui(2, my_ckind, -1);
+    } else {
+        pc_fighter_ui(0, -1, -1);
+    }
 }
 
 static void cycleMine(int delta)
@@ -1347,8 +1425,8 @@ static void cpuMenu(u64 keys, OnlineLobbyView* view)
     }
     view->title = "VS CPU";
     snprintf(view->subtitle, sizeof view->subtitle, "1 stock, until a knockout");
-    snprintf(view->menu[0], sizeof view->menu[0], "P1: %s", tactics_FighterName(draft[0].ckind));
-    snprintf(view->menu[1], sizeof view->menu[1], "P2: %s", tactics_FighterName(draft[1].ckind));
+    snprintf(view->menu[0], sizeof view->menu[0], "P1: %s", draftName(0));
+    snprintf(view->menu[1], sizeof view->menu[1], "P2: %s", draftName(1));
     snprintf(view->menu[2], sizeof view->menu[2], "P2 plays: %s", p2_cpu ? "CPU" : "Human");
     snprintf(view->menu[3], sizeof view->menu[3], "FIGHT");
     view->menu_count = MENU_ROWS;
@@ -1501,6 +1579,7 @@ void tactics_DraftFrame(void)
     frames++;
     screen_frames++;
     view.screen = LOBBY_SCREEN_MENU;
+    takeFighterTap();
     switch (screen) {
     case SCR_MAIN:
         mainMenu(keys, &view);
@@ -1518,6 +1597,7 @@ void tactics_DraftFrame(void)
         lobbyMenu(keys, &view);
         break;
     }
+    showFighterUi();
     if (view.title == NULL) {
         return; /* the screen changed or the scene is leaving */
     }

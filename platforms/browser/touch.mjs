@@ -6,6 +6,18 @@
 
 const PAD = { left: 0x0001, right: 0x0002, down: 0x0004, up: 0x0008, a: 0x0100, b: 0x0200, start: 0x1000 };
 
+// A ring that spreads from where the thumb landed, so a press is felt even
+// under the thumb.
+function ripple(el, event) {
+  const box = el.getBoundingClientRect();
+  const ring = document.createElement('i');
+  ring.className = 'ripple';
+  ring.style.left = `${event.clientX - box.left}px`;
+  ring.style.top = `${event.clientY - box.top}px`;
+  ring.addEventListener('animationend', () => ring.remove());
+  el.append(ring);
+}
+
 export function createTouchControls({ left, right, send }) {
   let dpad = 0;
   const held = new Map(); // pointerId -> button bit, for the right-hand buttons
@@ -25,7 +37,8 @@ export function createTouchControls({ left, right, send }) {
   // it changes direction without lifting.
   const pad = document.createElement('div');
   pad.className = 'dpad';
-  pad.innerHTML = '<span class="up">▲</span><span class="left">◀</span><span class="right">▶</span><span class="down">▼</span>';
+  pad.innerHTML = '<b class="hub"></b><span class="up">▲</span><span class="left">◀</span>' +
+    '<span class="right">▶</span><span class="down">▼</span>';
   left.append(pad);
   let dpadPointer = null;
   function aim(event) {
@@ -44,6 +57,7 @@ export function createTouchControls({ left, right, send }) {
     dpadPointer = event.pointerId;
     pad.setPointerCapture(event.pointerId);
     aim(event);
+    ripple(pad, event);
   });
   pad.addEventListener('pointermove', (event) => event.pointerId === dpadPointer && aim(event));
   const release = (event) => {
@@ -59,12 +73,13 @@ export function createTouchControls({ left, right, send }) {
   function button(name, label) {
     const el = document.createElement('button');
     el.className = `btn btn-${name}`;
-    el.textContent = label;
+    el.append(Object.assign(document.createElement('span'), { className: 'btn-label', textContent: label }));
     el.addEventListener('pointerdown', (event) => {
       event.preventDefault();
       el.setPointerCapture(event.pointerId);
       held.set(event.pointerId, PAD[name]);
       el.classList.add('down');
+      ripple(el, event);
       update();
     });
     const up = (event) => {
@@ -114,6 +129,7 @@ export function createPlanOverlay({ stage, pick }) {
       if (navigator.vibrate) navigator.vibrate(10);
       for (const b of stage.querySelectorAll('.plan-row')) b.classList.remove('current');
       button.classList.add('current', 'chosen');
+      ripple(button, event);
       pick(index);
     });
     return button;
@@ -152,4 +168,92 @@ export function createPlanOverlay({ stage, pick }) {
   // Turning the phone moves the list.
   landscape.addEventListener('change', () => last && show(...last));
   return show;
+}
+
+// Melee's roster in its own select-screen order, by character kind (the
+// engine's CharacterKind), with a short name that fits a tile and a colour
+// for its stripe. The Ice Climbers are left out: Melee Tactics cannot drive
+// the pair.
+const ROSTER = [
+  [22, 'Dr. Mario', '#e8e8f0'], [8, 'Mario', '#e0403a'], [7, 'Luigi', '#3cb850'],
+  [5, 'Bowser', '#6a9a30'], [12, 'Peach', '#f08cc0'], [17, 'Yoshi', '#58c858'],
+  [1, 'DK', '#9a5a2a'], [0, 'Falcon', '#c03040'], [25, 'Ganon', '#5a3a7a'],
+  [20, 'Falco', '#4a70d0'], [2, 'Fox', '#d89a40'], [11, 'Ness', '#e05050'],
+  [4, 'Kirby', '#f4a0c0'], [16, 'Samus', '#e07020'], [18, 'Zelda', '#d0a0e0'],
+  [19, 'Sheik', '#6070b0'], [6, 'Link', '#40a040'], [21, 'Y. Link', '#70c050'],
+  [24, 'Pichu', '#f0e070'], [13, 'Pikachu', '#f0d030'], [15, 'Jiggly', '#f8b0d0'],
+  [10, 'Mewtwo', '#a080c0'], [3, 'G&W', '#404040'], [9, 'Marth', '#3a5ac0'],
+  [23, 'Roy', '#c04030'],
+];
+
+// The fighter menus as a grid of tiles in the space the game leaves (plan_web.c
+// mirrors which menu is up): against the CPU, P1's grid on one side and P2's
+// on the other with Back and Fight; online, only the player's own, beside the
+// usual controls. A tap chooses at once; -1 is Random.
+export function createFighterPicker({ stage, pick, press }) {
+  const sides = ['left', 'right'].map((side) => {
+    const el = document.createElement('div');
+    el.className = `picker picker-${side}`;
+    el.hidden = true;
+    stage.append(el);
+    return el;
+  });
+
+  function grid(slot, current, withRandom) {
+    const tiles = document.createElement('div');
+    tiles.className = 'picker-grid';
+    const entries = withRandom ? [[-1, 'Random', '#e0b030'], ...ROSTER] : ROSTER;
+    for (const [ckind, name, colour] of entries) {
+      const tile = document.createElement('button');
+      tile.className = ckind === current ? 'tile chosen' : 'tile';
+      tile.style.setProperty('--tint', colour);
+      tile.textContent = ckind < 0 ? '?' : name;
+      if (ckind < 0) tile.classList.add('tile-random');
+      tile.addEventListener('pointerdown', (event) => {
+        event.preventDefault();
+        if (navigator.vibrate) navigator.vibrate(10);
+        for (const t of tiles.children) t.classList.remove('chosen');
+        tile.classList.add('chosen');
+        ripple(tile, event);
+        pick(slot, ckind);
+      });
+      tiles.append(tile);
+    }
+    return tiles;
+  }
+
+  function head(text, name) {
+    const el = document.createElement('div');
+    el.className = 'picker-head';
+    el.append(Object.assign(document.createElement('b'), { textContent: text }), ` ${name}`);
+    return el;
+  }
+
+  function action(label, cls, bits) {
+    const el = document.createElement('button');
+    el.className = `picker-action ${cls}`;
+    el.textContent = label;
+    el.addEventListener('pointerdown', (event) => {
+      event.preventDefault();
+      if (navigator.vibrate) navigator.vibrate(12);
+      ripple(el, event);
+      press(bits);
+    });
+    return el;
+  }
+
+  const nameOf = (ckind) => (ckind < 0 ? 'Random' : ROSTER.find(([k]) => k === ckind)?.[1] || '');
+
+  return function show(mode, p1, p2) {
+    const [left, right] = sides;
+    left.hidden = right.hidden = mode === 0;
+    stage.classList.toggle('picking', mode !== 0);
+    if (mode === 1) {
+      left.replaceChildren(head('P1', nameOf(p1)), grid(0, p1, true), action('Back', 'back', PAD.b));
+      right.replaceChildren(head('P2', nameOf(p2)), grid(1, p2, true), action('Fight!', 'fight', PAD.start));
+    } else if (mode === 2) {
+      left.replaceChildren(head('You', nameOf(p1)), grid(0, p1, true));
+      right.hidden = true;
+    }
+  };
 }

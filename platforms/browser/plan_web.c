@@ -48,3 +48,30 @@ bool pc_plan_ui(bool visible, const char* title, const char* sub, const char* co
 EMSCRIPTEN_KEEPALIVE void browser_plan_pick(int index) {
     tactics_PlanTap(index);
 }
+
+/* The fighter menus as a tap grid (touch.mjs createFighterPicker). */
+void tactics_FighterTap(int slot, int ckind);
+
+// clang-format off
+EM_JS(void, fighter_web_show, (int mode, int p1, int p2), {
+  if (Module.onFighters) Module.onFighters(mode, p1, p2);
+});
+// clang-format on
+
+void pc_fighter_ui(int mode, int p1, int p2) {
+    static int last[3] = { -2, -2, -2 };
+
+    if (mode == last[0] && p1 == last[1] && p2 == last[2]) {
+        return;
+    }
+    last[0] = mode;
+    last[1] = p1;
+    last[2] = p2;
+    fighter_web_show(mode, p1, p2);
+}
+
+/* slot 0 or 1 (P1, P2 against the CPU; online, the player's own), and the
+ * character kind, -1 for random. */
+EMSCRIPTEN_KEEPALIVE void browser_pick_fighter(int slot, int ckind) {
+    tactics_FighterTap(slot, ckind);
+}

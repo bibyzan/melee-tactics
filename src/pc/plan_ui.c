@@ -13,3 +13,9 @@ bool pc_plan_ui(bool visible, const char* title, const char* sub, const char* co
     (void)cursor;
     return false;
 }
+
+void pc_fighter_ui(int mode, int p1, int p2) {
+    (void)mode;
+    (void)p1;
+    (void)p2;
+}

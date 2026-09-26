@@ -6,7 +6,7 @@
 // through Module.tacticsLink (link.mjs).
 import { createDiscCache } from './disc-cache.mjs';
 import { createLinkManager } from './link.mjs';
-import { createPlanOverlay, createTouchControls, wantsTouch } from './touch.mjs';
+import { createFighterPicker, createPlanOverlay, createTouchControls, wantsTouch } from './touch.mjs';
 
 const $ = (id) => document.getElementById(id);
 const lines = [];
@@ -275,6 +275,13 @@ async function begin() {
       createTouchControls({ left: $('pad-left'), right: $('pad-right'),
                             send: (buttons) => Module._browser_touch_pad(buttons) });
       Module.onPlan = createPlanOverlay({ stage: $('stage'), pick: (index) => Module._browser_plan_pick(index) });
+      // A tap on Back or Fight is a press of B or START on the pad.
+      const press = (bits) => {
+        Module._browser_touch_pad(bits);
+        setTimeout(() => Module._browser_touch_pad(0), 90);
+      };
+      Module.onFighters = createFighterPicker({ stage: $('stage'), press,
+        pick: (slot, ckind) => Module._browser_pick_fighter(slot, ckind) });
     }
     status('');
     $('canvas').focus();
