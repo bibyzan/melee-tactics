@@ -16,8 +16,20 @@ int dht_random_bytes(void* buf, size_t size);
 EM_JS(int, link_web_available, (void), {
   return Module.tacticsLink ? 1 : 0;
 });
-EM_JS(int, link_web_host, (const char* name), {
-  return Module.tacticsLink ? Module.tacticsLink.host(UTF8ToString(name)) : 0;
+EM_JS(int, link_web_host, (const char* name, int open), {
+  return Module.tacticsLink ? Module.tacticsLink.host(UTF8ToString(name), !!open) : 0;
+});
+EM_JS(void, link_web_invite_url, (char* out, int len), {
+  stringToUTF8(Module.tacticsLink ? Module.tacticsLink.inviteUrl() : '', out, len);
+});
+EM_JS(int, link_web_share_invite, (void), {
+  return Module.tacticsLink ? Module.tacticsLink.shareInvite() : 0;
+});
+EM_JS(int, link_web_invite, (char* out, int len), {
+  const room = Module.tacticsLink ? Module.tacticsLink.takeInvite() : '';
+  if (!room) return 0;
+  stringToUTF8(room, out, len);
+  return 1;
 });
 EM_JS(int, link_web_join, (const char* room), {
   return Module.tacticsLink ? Module.tacticsLink.join(UTF8ToString(room)) : 0;
@@ -62,8 +74,23 @@ bool pc_link_available(void) {
     return link_web_available() != 0;
 }
 
-bool pc_link_host(const char* name) {
-    return link_web_host(name) != 0;
+bool pc_link_host(const char* name, bool open) {
+    return link_web_host(name, open ? 1 : 0) != 0;
+}
+
+const char* pc_link_invite_url(void) {
+    static char url[160];
+
+    link_web_invite_url(url, sizeof url);
+    return url;
+}
+
+bool pc_link_share_invite(void) {
+    return link_web_share_invite() != 0;
+}
+
+bool pc_link_invite(char* room, int cap) {
+    return link_web_invite(room, cap) != 0;
 }
 
 bool pc_link_join(const char* room) {

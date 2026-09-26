@@ -5,7 +5,7 @@
 // menu, against the CPU or online, is in the game itself; online play goes
 // through Module.tacticsLink (link.mjs).
 import { createDiscCache } from './disc-cache.mjs';
-import { createLinkManager } from './link.mjs';
+import { createLinkManager, inviteFromUrl } from './link.mjs';
 import { createFighterPicker, createPlanOverlay, createTouchControls, wantsTouch } from './touch.mjs';
 
 const $ = (id) => document.getElementById(id);
@@ -16,6 +16,11 @@ function log(text) {
   console.log(text);
 }
 const status = (text) => { $('status').textContent = text; };
+// A status line that clears itself.
+function flash(text) {
+  status(text);
+  setTimeout(() => { if ($('status').textContent === text) status(''); }, 3000);
+}
 
 // Rolling frame times; read by tests/browser/shell-e2e.mjs.
 const frames = { count: 0, last: 0, samples: [] };
@@ -46,6 +51,10 @@ const params = new URLSearchParams(location.search);
 for (const [key, value] of params) {
   if (/^MELEE_[A-Z0-9_]+$/.test(key)) ENV[key] = value;
 }
+// Opened from a friend's invite link. A first visit still needs the disc,
+// so the welcome says what it is for.
+const invite = inviteFromUrl(params);
+if (invite) $('invite-note').hidden = false;
 
 // ---- the screen ------------------------------------------------------------
 
@@ -248,8 +257,15 @@ async function begin() {
     Module.discFile = disc;
     Module.readDisc = createDiscCache(disc).read;
     // ?relay=1 skips the direct connection and goes through the server.
-    Module.tacticsLink = createLinkManager({ iceServers: await iceServers(), log,
-                                            forceRelay: params.get('relay') === '1' });
+    // ?join=ROOM, a friend's invite link: the game joins that lobby.
+    const link = createLinkManager({ iceServers: await iceServers(), log,
+                                     forceRelay: params.get('relay') === '1', invite,
+                                     onCopied: () => flash('Invite link copied. Send it to a friend!') });
+    Module.tacticsLink = link;
+    // While a closed lobby waits for its friend, a real button to share the
+    // link: a tap on it is the gesture the share sheet needs.
+    setInterval(() => { $('share-invite').hidden = !link.waitingForFriend(); }, 500);
+    $('share-invite').addEventListener('click', () => link.shareInvite());
     for (const dir of ['/saves', '/cache']) {
       Module.FS.mkdirTree(dir);
       Module.FS.mount(Module.FS.filesystems.IDBFS, { autoPersist: dir === '/saves' }, dir);

@@ -140,6 +140,39 @@ func TestLobbies(t *testing.T) {
 	}
 }
 
+func TestClosedLobby(t *testing.T) {
+	h := &hub{rooms: map[string]*room{}}
+	srv := httptest.NewServer(isolated(httpMux(h)))
+	defer srv.Close()
+	url := "ws" + strings.TrimPrefix(srv.URL, "http")
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	host, _, err := websocket.Dial(ctx, url+"/ws?room=FRIEND1&role=host&name=Fox&open=0", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer host.Close(websocket.StatusNormalClosure, "")
+	for i := 0; i < 50; i++ {
+		h.mu.Lock()
+		in := h.rooms["FRIEND1"] != nil
+		h.mu.Unlock()
+		if in {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if got := lobbies(t, srv.URL); len(got) != 0 {
+		t.Fatalf("closed lobby listed: %v", got)
+	}
+	// The invite link still gets a friend in.
+	guest := dial(t, ctx, url, "FRIEND1", "guest")
+	defer guest.Close(websocket.StatusNormalClosure, "")
+	if m := read(t, ctx, guest); m.Type != "peer" {
+		t.Fatalf("invited guest got %q, want peer", m.Type)
+	}
+}
+
 func httpGet(url string) ([]byte, error) {
 	res, err := http.Get(url)
 	if err != nil {

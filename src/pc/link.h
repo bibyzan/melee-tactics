@@ -42,8 +42,9 @@ typedef struct PcLinkLobby {
 
 /* This build can play online at all. */
 bool pc_link_available(void);
-/* Open a lobby others can find under name; this side hosts (P1). */
-bool pc_link_host(const char* name);
+/* Open a lobby under name; this side hosts (P1). An open lobby is on the
+ * list others see; a closed one is joined only through its invite link. */
+bool pc_link_host(const char* name, bool open);
 /* Join an open lobby from pc_link_lobbies. */
 bool pc_link_join(const char* room);
 /* Ask for a fresh list of open lobbies. */
@@ -52,6 +53,14 @@ void pc_link_refresh(void);
 int pc_link_lobbies(PcLinkLobby* out, int cap);
 /* The room this side hosts or joined, or "". */
 const char* pc_link_room(void);
+
+/* Invites. The link that joins the hosted room (for showing; "" where there
+ * is none), and a hand-off to the platform's share sheet or clipboard, true
+ * when it took it. A game opened from an invite link reports the room once
+ * through pc_link_invite, and the game joins it. */
+const char* pc_link_invite_url(void);
+bool pc_link_share_invite(void);
+bool pc_link_invite(char* room, int cap);
 
 /* Services the connection without blocking; call once per frame. */
 PcLinkState pc_link_state(void);

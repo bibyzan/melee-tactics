@@ -119,11 +119,11 @@ static void fresh(bool host)
     N.host = host;
 }
 
-bool tactics_NetHost(const char* name)
+bool tactics_NetHost(const char* name, bool open)
 {
     fresh(true);
     setStatus("Waiting for an opponent to join...");
-    if (!pc_link_host(name)) {
+    if (!pc_link_host(name, open)) {
         setStatus("Could not open a lobby");
         return false;
     }

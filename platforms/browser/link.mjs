@@ -33,7 +33,7 @@ const fromBase64 = (text) => Uint8Array.from(atob(text), (c) => c.charCodeAt(0))
 // counts as blocked and the session goes through the server instead.
 const DIRECT_WAIT_MS = 8000;
 
-function openSession({ room, host, name, iceServers, log, forceRelay }) {
+function openSession({ room, host, name, open = true, iceServers, log, forceRelay }) {
   const inbox = [];
   let state = 1;
   let relay = false;
@@ -42,7 +42,7 @@ function openSession({ room, host, name, iceServers, log, forceRelay }) {
   let directTimer = null;
   const pc = new RTCPeerConnection({ iceServers });
   const scheme = location.protocol === 'https:' ? 'wss:' : 'ws:';
-  const query = new URLSearchParams({ room, role: host ? 'host' : 'guest', name: name || '' });
+  const query = new URLSearchParams({ room, role: host ? 'host' : 'guest', name: name || '', open: open ? '1' : '0' });
   // The socket stays open for the whole session: it carries the fallback.
   const ws = new WebSocket(`${scheme}//${location.host}${location.pathname.replace(/[^/]*$/, '')}ws?${query}`);
   const post = (msg) => ws.readyState === WebSocket.OPEN && ws.send(JSON.stringify(msg));
@@ -145,6 +145,7 @@ function openSession({ room, host, name, iceServers, log, forceRelay }) {
   return {
     room,
     host,
+    open,
     state: () => state,
     send(bytes) {
       if (state !== 2) return 0;
@@ -166,21 +167,66 @@ function openSession({ room, host, name, iceServers, log, forceRelay }) {
   };
 }
 
-export function createLinkManager({ iceServers, log = console.log, forceRelay = false }) {
+// A lobby's invite link opens the page with ?join=ROOM; see takeInvite.
+export function inviteFromUrl(params) {
+  const room = (params.get('join') || '').toUpperCase();
+  return /^[A-Z0-9]{4,12}$/.test(room) ? room : '';
+}
+
+export function createLinkManager({ iceServers, log = console.log, forceRelay = false, invite = '',
+                                   onCopied = () => {} }) {
   let session = null;
   let list = null;
   let refreshing = false;
+  let pendingInvite = invite;
   const base = location.pathname.replace(/[^/]*$/, '');
+  const inviteUrl = () =>
+    (session?.host ? `${location.origin}${base}?join=${session.room}` : '');
 
   return {
     get isHost() { return !!session?.host; },
     room: () => session?.room || '',
     state: () => (session ? session.state() : 0),
-    host(name) {
+    host(name, open = true) {
       session?.close();
-      session = openSession({ room: roomCode(), host: true, name, iceServers, log, forceRelay });
-      log(`link: hosting lobby ${session.room}`);
+      session = openSession({ room: roomCode(), host: true, name, open, iceServers, log, forceRelay });
+      log(`link: hosting ${open ? 'an open' : 'a closed'} lobby ${session.room}`);
       return 1;
+    },
+    inviteUrl,
+    // A closed lobby still waiting for its friend: the page offers its own
+    // share button then.
+    waitingForFriend: () => !!session?.host && !session.open && session.state() === 1,
+    // The phone's share sheet, else the clipboard. Called on a button press
+    // in the game, which counts as the user's gesture for both.
+    shareInvite() {
+      const url = inviteUrl();
+      if (!url) return 0;
+      const text = 'Play me in Melee Tactics! Tap to join my lobby:';
+      const copy = () => navigator.clipboard?.writeText(url)
+        .then(() => { log(`link: copied ${url}`); onCopied(); }, () => {});
+      if (navigator.share) {
+        // Refused (no recent tap to count as the gesture): copy it instead.
+        navigator.share({ title: 'Melee Tactics', text, url })
+          .catch((error) => error?.name !== 'AbortError' && copy());
+        return 1;
+      }
+      if (navigator.clipboard?.writeText) {
+        copy();
+        return 1;
+      }
+      return 0;
+    },
+    // The lobby an invite link asked for, once: the game joins it.
+    takeInvite() {
+      const room = pendingInvite;
+      pendingInvite = '';
+      if (room) {
+        const url = new URL(location.href);
+        url.searchParams.delete('join');
+        history.replaceState(null, '', url);
+      }
+      return room;
     },
     join(room) {
       session?.close();

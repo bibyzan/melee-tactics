@@ -186,7 +186,7 @@ int tactics_SyncBreak(void);
 /// This build can play online (pc_link_available).
 bool tactics_NetAvailable(void);
 /// Open a lobby under name (this side hosts, P1), or join one by its room.
-bool tactics_NetHost(const char* name);
+bool tactics_NetHost(const char* name, bool open);
 bool tactics_NetJoin(const char* room);
 /// End the session.
 void tactics_NetLeave(void);

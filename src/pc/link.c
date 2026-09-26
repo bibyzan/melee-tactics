@@ -149,10 +149,11 @@ bool pc_link_available(void) {
     return true;
 }
 
-bool pc_link_host(const char* name) {
+bool pc_link_host(const char* name, bool open) {
     const char* port = getenv("MELEE_LINK_PORT") ? getenv("MELEE_LINK_PORT") : "47100";
 
     (void)name;
+    (void)open;
     begin(true, port);
     if (!start_listen(port)) {
         fail("cannot listen");
@@ -187,6 +188,22 @@ int pc_link_lobbies(PcLinkLobby* out, int cap) {
 
 const char* pc_link_room(void) {
     return L.state == PC_LINK_NONE ? "" : L.room;
+}
+
+/* Natively there are no invite links: a guest names the host with
+ * MELEE_LINK_CONNECT. */
+const char* pc_link_invite_url(void) {
+    return "";
+}
+
+bool pc_link_share_invite(void) {
+    return false;
+}
+
+bool pc_link_invite(char* room, int cap) {
+    (void)room;
+    (void)cap;
+    return false;
 }
 
 /* Guest: a non-blocking connect, retried until the host is listening. */

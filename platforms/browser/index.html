@@ -12,6 +12,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Melee Tactics">
 <title>Melee Tactics</title>
+<!--og-->
 <link rel="icon" type="image/png" href="./icons/favicon-32.png">
 <link rel="apple-touch-icon" href="./icons/apple-touch-icon.png">
 <style>
@@ -27,6 +28,14 @@
   #pick input { display: none; }
   #welcome p { color: #9a9ab0; font-size: 13px; margin-top: 16px; }
   #ios-tip { color: #e0b030; }
+  #welcome #invite-note { color: #f0c850; font-size: 16px; font-weight: 600; margin: 0 0 18px; }
+  /* While a closed lobby waits: the button that shares its invite link. */
+  #share-invite { position: fixed; z-index: 3; top: max(10px, env(safe-area-inset-top)); left: 50%;
+                  transform: translateX(-50%); padding: 10px 22px; border: 0; border-radius: 999px;
+                  background: linear-gradient(#ffd866, #e0a820); color: #1a1406; box-shadow: 0 3px 0 #8a6410, 0 4px 14px #0008;
+                  font: 800 15px system-ui, sans-serif; -webkit-tap-highlight-color: transparent; }
+  #share-invite:active { transform: translateX(-50%) translateY(2px); box-shadow: 0 1px 0 #8a6410; }
+  #share-invite[hidden] { display: none; }
 
   /* The game, alone on a desktop. */
   #stage { display: none; width: min(100vw, calc(100vh * 4 / 3)); }
@@ -177,6 +186,7 @@
 </style>
 <div id="welcome">
   <h1>MELEE TACTICS</h1>
+  <p id="invite-note" hidden>You're invited to a match! Choose your Melee disc and you'll go straight into your friend's lobby.</p>
   <label id="pick">Choose your Melee ISO<input id="disc" type="file" accept=".iso,.gcm" disabled></label>
   <p>Super Smash Bros. Melee, NTSC 1.02 (GALE01). It stays on this device, and the page remembers it for next time.</p>
   <p id="ios-tip" hidden>For full screen on iPhone: tap Share, then Add to Home Screen, and open Melee Tactics from there.</p>
@@ -186,6 +196,7 @@
   <div id="game"><canvas id="canvas" width="1280" height="960" tabindex="0"></canvas></div>
   <div class="pad" id="pad-right"></div>
 </main>
+<button id="share-invite" hidden>Share invite link</button>
 <div id="status">Loading…</div>
 <details><summary>Log</summary><button id="forget">Forget the remembered disc</button><pre id="log"></pre></details>
 <script type="module" src="./shell.mjs"></script>

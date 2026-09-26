@@ -1164,7 +1164,7 @@ typedef enum MenuScreen {
 
 enum {
     MAIN_ROWS = 2,
-    ONLINE_ROWS = 3,
+    ONLINE_ROWS = 4,
     LOBBY_LIST_MAX = 7,
     LOBBY_REFRESH_FRAMES = 90,
 };
@@ -1172,6 +1172,9 @@ enum {
 static MenuScreen screen;
 static int screen_frames;
 static int my_ckind = CKind_Ganon;
+/* The next lobby this side opens: listed for anyone, or closed to all but
+ * its invite link. */
+static bool lobby_closed;
 static PcLinkLobby found[LOBBY_LIST_MAX];
 static int found_n = -1;
 static char menu_note[96];
@@ -1434,6 +1437,34 @@ static void cpuMenu(u64 keys, OnlineLobbyView* view)
     view->hint = "Left/Right change   START fight   B back";
 }
 
+/* A fresh lobby, open to anyone or closed to all but an invite link. */
+static void hostLobby(void)
+{
+    char name[PC_LINK_NAME_LEN];
+
+    snprintf(name, sizeof name, "%s", tactics_FighterName(my_ckind));
+    online_ready = false;
+    menu_note[0] = '\0';
+    tactics_NetHost(name, !lobby_closed);
+    goScreen(SCR_LOBBY);
+}
+
+/* A game opened from an invite link goes straight to that lobby. */
+static bool takeInvite(void)
+{
+    char room[PC_LINK_ROOM_LEN];
+
+    if (!tactics_NetAvailable() || !pc_link_invite(room, sizeof room)) {
+        return false;
+    }
+    pc_log_line("tactics: invited to lobby %s", room);
+    online_ready = false;
+    snprintf(menu_note, sizeof menu_note, "%s", "");
+    tactics_NetJoin(room);
+    goScreen(SCR_LOBBY);
+    return true;
+}
+
 static void onlineMenu(u64 keys, OnlineLobbyView* view)
 {
     int delta = (keys & PAD_ANY_RIGHT) ? 1 : (keys & PAD_ANY_LEFT) ? -1 : 0;
@@ -1443,24 +1474,23 @@ static void onlineMenu(u64 keys, OnlineLobbyView* view)
     if (delta != 0 && cursor == 0) {
         cycleMine(delta);
     }
+    if ((delta != 0 || pick) && cursor == 1) {
+        lobby_closed = !lobby_closed;
+        pick = false;
+    }
     if (scriptedOnline() != NULL && screen_frames == 30) {
-        cursor = strcmp(scriptedOnline(), "host") == 0 ? 1 : 2;
+        cursor = strcmp(scriptedOnline(), "host") == 0 ? 2 : 3;
         pick = true;
     }
     if (keys & PAD_CANCEL) {
         goScreen(SCR_MAIN);
         return;
     }
-    if (pick && cursor == 1) {
-        char name[PC_LINK_NAME_LEN];
-
-        snprintf(name, sizeof name, "%s", tactics_FighterName(my_ckind));
-        online_ready = false;
-        tactics_NetHost(name);
-        goScreen(SCR_LOBBY);
+    if (pick && cursor == 2) {
+        hostLobby();
         return;
     }
-    if (pick && cursor == 2) {
+    if (pick && cursor == 3) {
         found_n = -1;
         pc_link_refresh();
         goScreen(SCR_FIND);
@@ -1469,11 +1499,16 @@ static void onlineMenu(u64 keys, OnlineLobbyView* view)
     view->title = "ONLINE";
     snprintf(view->subtitle, sizeof view->subtitle, "Play against another player");
     snprintf(view->menu[0], sizeof view->menu[0], "Your fighter: %s", tactics_FighterName(my_ckind));
-    snprintf(view->menu[1], sizeof view->menu[1], "CREATE LOBBY");
-    snprintf(view->menu[2], sizeof view->menu[2], "FIND A LOBBY");
+    snprintf(view->menu[1], sizeof view->menu[1], "Lobby: %s",
+             lobby_closed ? "Closed (invite only)" : "Open (listed)");
+    snprintf(view->menu[2], sizeof view->menu[2], "CREATE LOBBY");
+    snprintf(view->menu[3], sizeof view->menu[3], "FIND A LOBBY");
     view->menu_count = ONLINE_ROWS;
-    snprintf(view->message, sizeof view->message, "%s", menu_note);
-    view->hint = "Left/Right fighter   A select   B back";
+    snprintf(view->message, sizeof view->message, "%s",
+             cursor == 1 ? (lobby_closed ? "Only friends with your invite link can join."
+                                         : "Anyone can find and join it.")
+                         : menu_note);
+    view->hint = cursor == 1 ? "Left/Right change   B back" : "Left/Right fighter   A select   B back";
 }
 
 /* The open lobbies, from the page server; refreshed while this is up. */
@@ -1518,6 +1553,11 @@ static void lobbyMenu(u64 keys, OnlineLobbyView* view)
 {
     int delta = (keys & PAD_ANY_RIGHT) ? 1 : (keys & PAD_ANY_LEFT) ? -1 : 0;
     const char* ready_at = getenv("MELEE_TACTICS_READY_FRAME");
+    /* Hosting and still alone: the link that brings a friend in. */
+    const char* invite = tactics_NetLocalPort() == 0 && !tactics_NetConnected() && !online_ready
+                             ? pc_link_invite_url()
+                             : "";
+    int rows = invite[0] != '\0' ? 3 : 2;
 
     if (keys & PAD_CANCEL) {
         pc_log_line("tactics: left the lobby");
@@ -1529,9 +1569,14 @@ static void lobbyMenu(u64 keys, OnlineLobbyView* view)
     if (!online_ready) {
         bool ready;
 
-        moveCursor(keys, 2);
+        moveCursor(keys, rows);
         if (delta != 0 && cursor == 0) {
             cycleMine(delta);
+        }
+        if ((keys & PAD_CONFIRM) && cursor == 2 && rows == 3) {
+            snprintf(menu_note, sizeof menu_note, "%s",
+                     pc_link_share_invite() ? "Invite link shared (or copied). Send it to a friend!"
+                                            : "Send a friend the link above.");
         }
         ready = ((keys & PAD_CONFIRM) && cursor == 1) || (keys & PAD_BUTTON_START);
         /* A scripted run readies at MELEE_TACTICS_READY_FRAME, or as soon as
@@ -1556,19 +1601,29 @@ static void lobbyMenu(u64 keys, OnlineLobbyView* view)
     } else {
         tactics_NetPoll();
     }
-    view->title = tactics_NetLocalPort() == 0 ? "YOUR LOBBY" : "LOBBY";
+    view->title = tactics_NetLocalPort() == 0 ? (lobby_closed ? "YOUR CLOSED LOBBY" : "YOUR LOBBY")
+                                              : "LOBBY";
     snprintf(view->subtitle, sizeof view->subtitle, "You are P%d", tactics_NetLocalPort() + 1);
     snprintf(view->menu[0], sizeof view->menu[0], "Your fighter: %s", tactics_FighterName(my_ckind));
     snprintf(view->menu[1], sizeof view->menu[1], "%s",
              online_ready             ? "READY - waiting for the other player"
              : tactics_NetConnected() ? "READY"
                                       : "READY (once someone joins)");
-    view->menu_count = 2;
+    snprintf(view->menu[2], sizeof view->menu[2], "SHARE INVITE LINK");
+    view->menu_count = rows;
     if (online_ready) {
         view->cursor = -1;
     }
-    snprintf(view->message, sizeof view->message, "%s", tactics_NetStatus());
-    view->hint = "Left/Right fighter   A ready   B leave";
+    if (invite[0] != '\0') {
+        /* The link without its scheme, short enough to read out or type. */
+        const char* shown = strstr(invite, "://") != NULL ? strstr(invite, "://") + 3 : invite;
+
+        snprintf(view->message, sizeof view->message, "%s",
+                 cursor == 2 && menu_note[0] != '\0' ? menu_note : shown);
+    } else {
+        snprintf(view->message, sizeof view->message, "%s", tactics_NetStatus());
+    }
+    view->hint = cursor == 2 && rows == 3 ? "A share   B leave" : "Left/Right fighter   A ready   B leave";
 }
 
 void tactics_DraftFrame(void)
@@ -1580,6 +1635,10 @@ void tactics_DraftFrame(void)
     screen_frames++;
     view.screen = LOBBY_SCREEN_MENU;
     takeFighterTap();
+    /* An invite link, once the menus are up and not mid-match. */
+    if ((screen == SCR_MAIN || screen == SCR_ONLINE) && screen_frames > 10 && scripted() == NULL) {
+        takeInvite();
+    }
     switch (screen) {
     case SCR_MAIN:
         mainMenu(keys, &view);

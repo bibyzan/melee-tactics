@@ -22,10 +22,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"html"
 	"log"
 	"mime"
 	"net/http"
 	"os"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
@@ -40,10 +42,12 @@ const defaultICE = `[{"urls":"stun:stun.l.google.com:19302"}]`
 var roomPattern = regexp.MustCompile(`^[A-Z0-9]{4,12}$`)
 
 // A room holds at most a host and a guest, and relays signaling between them.
-// A room with a host and no guest is an open lobby, listed at /lobbies.
+// A room with a host and no guest is a lobby; an open one is listed at
+// /lobbies, a closed one only reached through its invite link.
 type room struct {
 	peers   map[string]*peer // "host", "guest"
 	name    string           // what the lobby list shows
+	closed  bool             // joined only by invite link: not listed
 	created time.Time
 }
 
@@ -84,7 +88,7 @@ func other(role string) string {
 
 // join puts p in the room, or says why it cannot. A host opens the room; a
 // guest can only join one whose host is still there.
-func (h *hub) join(code, role, name string, p *peer) error {
+func (h *hub) join(code, role, name string, closed bool, p *peer) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	r := h.rooms[code]
@@ -103,6 +107,7 @@ func (h *hub) join(code, role, name string, p *peer) error {
 	}
 	if role == "host" {
 		r.name = name
+		r.closed = closed
 	}
 	r.peers[role] = p
 	if q := r.peers[other(role)]; q != nil {
@@ -136,7 +141,7 @@ func (h *hub) lobbies() []lobby {
 	now := time.Now()
 	list := []lobby{}
 	for code, r := range h.rooms {
-		if r.peers["host"] != nil && r.peers["guest"] == nil {
+		if r.peers["host"] != nil && r.peers["guest"] == nil && !r.closed {
 			list = append(list, lobby{Room: code, Name: r.name, Age: int(now.Sub(r.created).Seconds())})
 		}
 	}
@@ -199,7 +204,9 @@ func (h *hub) serveWS(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
 
-	if err := h.join(code, role, lobbyName(r.URL.Query().Get("name"), code), p); err != nil {
+	// open=0: a closed lobby, joined only through its invite link.
+	closed := r.URL.Query().Get("open") == "0"
+	if err := h.join(code, role, lobbyName(r.URL.Query().Get("name"), code), closed, p); err != nil {
 		wctx, wcancel := context.WithTimeout(ctx, 5*time.Second)
 		conn.Write(wctx, websocket.MessageText, encode(message{Type: "error", Message: err.Error()}))
 		wcancel()
@@ -330,8 +337,41 @@ func httpMux(h *hub) *http.ServeMux {
 			http.ServeFile(w, r, devDisc)
 		})
 	}
-	mux.Handle("/", http.FileServer(http.Dir(webDir)))
+	files := http.FileServer(http.Dir(webDir))
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/" || r.URL.Path == "/index.html" {
+			servePage(w, r)
+			return
+		}
+		files.ServeHTTP(w, r)
+	})
 	return mux
+}
+
+// servePage is index.html with its link preview filled in: a texted invite
+// link shows as a card with the icon, which needs absolute URLs.
+func servePage(w http.ResponseWriter, r *http.Request) {
+	page, err := os.ReadFile(filepath.Join(webDir, "index.html"))
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	scheme := "http"
+	if r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https" {
+		scheme = "https"
+	}
+	origin := scheme + "://" + r.Host
+	title, about := "Melee Tactics", "Melee as a game of reads: pick your moves, then watch them play out."
+	if r.URL.Query().Get("join") != "" {
+		title, about = "Join my Melee Tactics lobby", "You're invited to a match. Tap to join."
+	}
+	tags := `<meta property="og:type" content="website">` +
+		`<meta property="og:title" content="` + html.EscapeString(title) + `">` +
+		`<meta property="og:description" content="` + html.EscapeString(about) + `">` +
+		`<meta property="og:image" content="` + html.EscapeString(origin) + `/icons/icon-512.png">` +
+		`<meta property="og:url" content="` + html.EscapeString(origin+r.URL.RequestURI()) + `">`
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Write([]byte(strings.Replace(string(page), "<!--og-->", tags, 1)))
 }
 
 func envOr(key, fallback string) string {
