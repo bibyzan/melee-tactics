@@ -189,8 +189,9 @@ const ROSTER = [
 // The fighter menus as a grid of tiles in the space the game leaves (plan_web.c
 // mirrors which menu is up): against the CPU, P1's grid on one side and P2's
 // on the other with Back and Fight; online, only the player's own, beside the
-// usual controls. A tap chooses at once; -1 is Random.
-export function createFighterPicker({ stage, pick, press }) {
+// usual controls. A tap chooses at once; -1 is Random. icons, when it
+// resolves, is each fighter's stock icon from the disc (icons.mjs).
+export function createFighterPicker({ stage, pick, press, icons }) {
   const sides = ['left', 'right'].map((side) => {
     const el = document.createElement('div');
     el.className = `picker picker-${side}`;
@@ -198,6 +199,8 @@ export function createFighterPicker({ stage, pick, press }) {
     stage.append(el);
     return el;
   });
+  let art = null;
+  let last = null;
 
   function grid(slot, current, withRandom) {
     const tiles = document.createElement('div');
@@ -207,7 +210,10 @@ export function createFighterPicker({ stage, pick, press }) {
       const tile = document.createElement('button');
       tile.className = ckind === current ? 'tile chosen' : 'tile';
       tile.style.setProperty('--tint', colour);
-      tile.textContent = ckind < 0 ? '?' : name;
+      if (ckind >= 0 && art?.get(ckind)) {
+        tile.append(Object.assign(document.createElement('img'), { src: art.get(ckind), alt: '', className: 'stock' }));
+      }
+      tile.append(Object.assign(document.createElement('span'), { textContent: ckind < 0 ? '?' : name }));
       if (ckind < 0) tile.classList.add('tile-random');
       tile.addEventListener('pointerdown', (event) => {
         event.preventDefault();
@@ -244,7 +250,15 @@ export function createFighterPicker({ stage, pick, press }) {
 
   const nameOf = (ckind) => (ckind < 0 ? 'Random' : ROSTER.find(([k]) => k === ckind)?.[1] || '');
 
-  return function show(mode, p1, p2) {
+  // The icons come in after the grid may already be up.
+  icons?.then((map) => {
+    art = map;
+    if (last) show(...last);
+  });
+
+  return show;
+  function show(mode, p1, p2) {
+    last = [mode, p1, p2];
     const [left, right] = sides;
     left.hidden = right.hidden = mode === 0;
     stage.classList.toggle('picking', mode !== 0);
@@ -255,5 +269,5 @@ export function createFighterPicker({ stage, pick, press }) {
       left.replaceChildren(head('You', nameOf(p1)), grid(0, p1, true));
       right.hidden = true;
     }
-  };
+  }
 }

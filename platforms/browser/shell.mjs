@@ -6,6 +6,7 @@
 // through Module.tacticsLink (link.mjs).
 import { createDiscCache } from './disc-cache.mjs';
 import { createLinkManager, inviteFromUrl } from './link.mjs';
+import { stockIcons } from './icons.mjs';
 import { createFighterPicker, createPlanOverlay, createTouchControls, wantsTouch } from './touch.mjs';
 
 const $ = (id) => document.getElementById(id);
@@ -296,7 +297,9 @@ async function begin() {
         Module._browser_touch_pad(bits);
         setTimeout(() => Module._browser_touch_pad(0), 90);
       };
-      Module.onFighters = createFighterPicker({ stage: $('stage'), press,
+      // The stock icons come off the disc in the background.
+      const icons = stockIcons(disc).catch((error) => { log(`No stock icons: ${error.message}`); return null; });
+      Module.onFighters = createFighterPicker({ stage: $('stage'), press, icons,
         pick: (slot, ckind) => Module._browser_pick_fighter(slot, ckind) });
     }
     status('');
